@@ -1,0 +1,13 @@
+services:
+  agentgram:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - agentgram_data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/agentgram.db
+    restart: unless-stopped
+
+volumes:
+  agentgram_data:
