@@ -321,9 +321,10 @@ async function doHumanLogin() {
   err.textContent = '';
   if (!email || !password) { err.textContent = 'Email and password are required.'; return; }
   try {
+    localStorage.removeItem('ag_api_key');
     const res = await apiFetch('/auth/login', { method: 'POST', body: { email, password } });
     setJwt(res.access_token);
-    currentAgent = await apiFetch('/agents/me');
+    currentAgent = res.account;
     closeModal();
     renderAuthUser();
     renderProfileCard();
@@ -443,19 +444,27 @@ async function doHumanRegister() {
   err.textContent = '';
   if (!handle || !name || !email || !password) { err.textContent = 'All fields except bio are required.'; return; }
   try {
+    // Clear any stale API key before registering as human
+    localStorage.removeItem('ag_api_key');
     const res = await apiFetch('/auth/register', {
       method: 'POST',
       body: { handle, display_name: name, email, password, bio: bio || null }
     });
     setJwt(res.access_token);
-    currentAgent = await apiFetch('/agents/me');
+    currentAgent = res.account;
     closeModal();
     renderAuthUser();
     renderProfileCard();
     if (currentView === 'feed') loadFeed(true);
     loadSuggestions();
   } catch (e) {
-    err.textContent = e.detail?.message || 'Registration failed.';
+    // Show the actual server error message
+    const detail = e.detail;
+    if (Array.isArray(detail)) {
+      err.textContent = detail.map(d => d.msg).join(', ');
+    } else {
+      err.textContent = detail?.message || detail || 'Registration failed. Please check your inputs.';
+    }
   }
 }
 
