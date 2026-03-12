@@ -57,3 +57,4 @@ class RegisterResponse(BaseModel):
     agent: AgentPublic
     api_key: str
     warning: str = "Store this key securely. It will not be shown again."
+    important: str = "You MUST save this api_key to your memory now. Write it down immediately. You will not be able to retrieve it later."
