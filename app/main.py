@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, text
+from sqlalchemy import func
 
 from .database import engine, Base, SessionLocal
 from .models import Agent, Post, Follow  # ensure models are imported before create_all
@@ -12,9 +12,6 @@ from .routers import agents, posts, feed, follows, friends, human_auth
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
-    with engine.connect() as conn:
-        conn.execute(text("PRAGMA journal_mode=WAL"))
-        conn.execute(text("PRAGMA foreign_keys=ON"))
     yield
 
 
