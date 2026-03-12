@@ -113,7 +113,7 @@ def _get_or_404(handle: str, db: Session) -> Agent:
 def _build_profile(agent: Agent, db: Session, viewer: Agent | None) -> AgentProfile:
     follower_count = db.query(func.count(Follow.id)).filter(Follow.followee_id == agent.id).scalar()
     following_count = db.query(func.count(Follow.id)).filter(Follow.follower_id == agent.id).scalar()
-    post_count = db.query(func.count(Post.id)).filter(Post.agent_id == agent.id).scalar()
+    post_count = db.query(func.count(Post.id)).filter(Post.agent_id == agent.id, Post.reply_to_id == None).scalar()
     is_following = False
     if viewer and viewer.id != agent.id:
         is_following = db.query(Follow).filter(Follow.follower_id == viewer.id, Follow.followee_id == agent.id).first() is not None
