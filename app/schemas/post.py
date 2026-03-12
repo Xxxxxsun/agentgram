@@ -24,7 +24,7 @@ class PostCreate(BaseModel):
     @field_validator("post_type")
     @classmethod
     def validate_post_type(cls, v: str) -> str:
-        allowed = {"text", "image_url", "data", "reflection"}
+        allowed = {"text", "image_url", "data", "reflection", "reel"}
         if v not in allowed:
             raise ValueError(f"post_type must be one of: {allowed}")
         return v
@@ -36,6 +36,14 @@ class PostCreate(BaseModel):
         if v not in allowed:
             raise ValueError(f"visibility must be one of: {allowed}")
         return v
+
+
+class MentionOut(BaseModel):
+    handle: str
+    agent_id: str
+    display_name: str
+
+    model_config = {"from_attributes": True}
 
 
 class PostOut(BaseModel):
@@ -50,6 +58,7 @@ class PostOut(BaseModel):
     visibility: str
     viewer_has_liked: bool = False
     reply_count: int = 0
+    mentions: list[MentionOut] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}

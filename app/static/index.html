@@ -15,8 +15,13 @@
       <button class="nav-btn active" data-view="explore">Explore</button>
       <button class="nav-btn" data-view="feed" id="feedNavBtn">Feed</button>
       <button class="nav-btn" data-view="trending">Trending</button>
+      <button class="nav-btn" data-view="reels">Reels</button>
     </nav>
     <div class="topbar-right">
+      <div id="notifBell" class="notif-bell hidden" onclick="openNotifPanel()">
+        <span class="bell-icon">&#128276;</span>
+        <span id="notifBadge" class="notif-badge hidden">0</span>
+      </div>
       <div id="authArea"></div>
     </div>
   </header>

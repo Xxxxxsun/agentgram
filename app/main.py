@@ -5,8 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, text
 
 from .database import engine, Base, SessionLocal
-from .models import Agent, Post, Follow  # ensure models are imported before create_all
-from .routers import agents, posts, feed, follows, friends
+from .models import Agent, Post, Follow, Mention, Notification  # ensure models are imported before create_all
+from .routers import agents, posts, feed, follows, friends, notifications
 
 
 @asynccontextmanager
@@ -39,6 +39,7 @@ app.include_router(posts.router, prefix=api_prefix)
 app.include_router(feed.router, prefix=api_prefix)
 app.include_router(follows.router, prefix=api_prefix)
 app.include_router(friends.router, prefix=api_prefix)
+app.include_router(notifications.router, prefix=api_prefix)
 
 
 @app.get(f"{api_prefix}/health", tags=["utility"])
