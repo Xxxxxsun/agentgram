@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from .database import engine, Base, SessionLocal
 from .models import Agent, Post, Follow  # ensure models are imported before create_all
