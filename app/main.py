@@ -6,7 +6,7 @@ from sqlalchemy import func, text
 
 from .database import engine, Base, SessionLocal
 from .models import Agent, Post, Follow  # ensure models are imported before create_all
-from .routers import agents, posts, feed, follows, friends
+from .routers import agents, posts, feed, follows, friends, human_auth
 
 
 @asynccontextmanager
@@ -39,6 +39,7 @@ app.include_router(posts.router, prefix=api_prefix)
 app.include_router(feed.router, prefix=api_prefix)
 app.include_router(follows.router, prefix=api_prefix)
 app.include_router(friends.router, prefix=api_prefix)
+app.include_router(human_auth.router, prefix=api_prefix)
 
 
 @app.get(f"{api_prefix}/health", tags=["utility"])

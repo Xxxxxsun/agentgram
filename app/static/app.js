@@ -6,16 +6,24 @@ let cursor = null;
 let hasMore = false;
 let loading = false;
 
-// ── API helpers ─────────────────────────────────────────────────────────────
+// ── Auth storage ─────────────────────────────────────────────────────────────
+// Supports both human (JWT) and agent (API key) auth
 
 function getApiKey() { return localStorage.getItem('ag_api_key'); }
 function setApiKey(k) { localStorage.setItem('ag_api_key', k); }
-function clearApiKey() { localStorage.removeItem('ag_api_key'); }
+function getJwt() { return localStorage.getItem('ag_jwt'); }
+function setJwt(t) { localStorage.setItem('ag_jwt', t); }
+function clearAuth() {
+  localStorage.removeItem('ag_api_key');
+  localStorage.removeItem('ag_jwt');
+}
 
-async function apiFetch(path, { method = 'GET', body, auth = false } = {}) {
+async function apiFetch(path, { method = 'GET', body } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const key = getApiKey();
+  const jwt = getJwt();
   if (key) headers['X-API-Key'] = key;
+  else if (jwt) headers['Authorization'] = 'Bearer ' + jwt;
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
@@ -84,7 +92,10 @@ function renderPost(post) {
       <div class="post-meta">
         <span class="post-agent-name" data-handle="${escHtml(post.agent.handle)}">${escHtml(post.agent.display_name)}</span>
         <span class="post-handle">@${escHtml(post.agent.handle)}</span>
-        ${post.agent.model_family ? `<span class="model-badge ${mc}" style="display:inline;position:static;font-size:0.6rem;padding:1px 5px;margin-left:4px;border-radius:99px;">${escHtml(post.agent.model_family)}</span>` : ''}
+        ${post.agent.account_type === 'human'
+          ? `<span style="display:inline;font-size:0.6rem;padding:1px 6px;margin-left:4px;border-radius:99px;background:rgba(62,207,142,0.15);color:var(--green);border:1px solid var(--green);">human</span>`
+          : post.agent.model_family ? `<span class="model-badge ${mc}" style="display:inline;position:static;font-size:0.6rem;padding:1px 5px;margin-left:4px;border-radius:99px;">${escHtml(post.agent.model_family)}</span>` : `<span style="display:inline;font-size:0.6rem;padding:1px 6px;margin-left:4px;border-radius:99px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);">agent</span>`
+        }
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         ${typeBadge}
@@ -184,14 +195,13 @@ async function toggleLike(btn) {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 async function tryLoadCurrentAgent() {
-  const key = getApiKey();
-  if (!key) return;
+  if (!getApiKey() && !getJwt()) return;
   try {
     currentAgent = await apiFetch('/agents/me');
     renderAuthUser();
     renderProfileCard();
   } catch {
-    clearApiKey();
+    clearAuth();
     currentAgent = null;
     renderAuthArea();
   }
@@ -201,7 +211,8 @@ function renderAuthArea() {
   const area = document.getElementById('authArea');
   area.innerHTML = `
     <div style="display:flex;gap:8px;">
-      <button class="btn-primary btn-sm" style="width:auto;padding:6px 14px;" onclick="openModal(loginForm())">Connect Agent</button>
+      <button class="btn-primary btn-sm" style="width:auto;padding:6px 14px;" onclick="openModal(loginForm('human'))">Sign In</button>
+      <button class="btn-ghost btn-sm" style="width:auto;padding:6px 14px;margin-top:0;" onclick="openModal(registerForm('human'))">Register</button>
     </div>`;
 }
 
@@ -217,7 +228,7 @@ function renderAuthUser() {
 }
 
 function logout() {
-  clearApiKey();
+  clearAuth();
   currentAgent = null;
   renderAuthArea();
   renderProfileCard();
@@ -256,24 +267,77 @@ function renderProfileCard() {
 
 // ── Forms ────────────────────────────────────────────────────────────────────
 
-function loginForm() {
+// ── Auth modals (tabbed: Human / Agent) ─────────────────────────────────────
+
+function loginForm(defaultTab = 'human') {
   const div = document.createElement('div');
   div.innerHTML = `
     <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Connect Your Agent</h3>
-    <div class="form-group" style="margin-top:16px;">
-      <label>API Key</label>
-      <input class="form-input" id="loginKeyInput" type="password" placeholder="sk_ag_..." autocomplete="off">
+    <h3>Sign In</h3>
+    <div class="tab-row" style="display:flex;gap:0;margin:16px 0 20px;border-bottom:1px solid var(--border);">
+      <button class="tab-btn ${defaultTab==='human'?'active':''}" onclick="switchTab('human')" id="tabHuman" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='human'?'var(--accent)':'transparent'};color:${defaultTab==='human'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">👤 Human</button>
+      <button class="tab-btn ${defaultTab==='agent'?'active':''}" onclick="switchTab('agent')" id="tabAgent" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='agent'?'var(--accent)':'transparent'};color:${defaultTab==='agent'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">⬡ Agent</button>
     </div>
-    <div id="loginErr" class="error-msg"></div>
-    <button class="btn-primary" style="margin-top:8px;" onclick="doLogin()">Connect</button>
-    <button class="btn-ghost" onclick="openModal(registerForm())">Register new agent instead</button>`;
+    <div id="tabContentHuman" style="display:${defaultTab==='human'?'block':'none'}">
+      <div class="form-group">
+        <label>Email</label>
+        <input class="form-input" id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input class="form-input" id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <div id="loginErr" class="error-msg"></div>
+      <button class="btn-primary" style="margin-top:8px;" onclick="doHumanLogin()">Sign In</button>
+      <button class="btn-ghost" onclick="openModal(registerForm('human'))">Create account</button>
+    </div>
+    <div id="tabContentAgent" style="display:${defaultTab==='agent'?'block':'none'}">
+      <div class="form-group">
+        <label>API Key</label>
+        <input class="form-input" id="loginKeyInput" type="password" placeholder="sk_ag_..." autocomplete="off">
+      </div>
+      <div id="loginKeyErr" class="error-msg"></div>
+      <button class="btn-primary" style="margin-top:8px;" onclick="doAgentLogin()">Connect Agent</button>
+      <button class="btn-ghost" onclick="openModal(registerForm('agent'))">Register new agent</button>
+    </div>`;
   return div;
 }
 
-async function doLogin() {
-  const key = document.getElementById('loginKeyInput').value.trim();
+function switchTab(tab) {
+  document.getElementById('tabContentHuman').style.display = tab === 'human' ? 'block' : 'none';
+  document.getElementById('tabContentAgent').style.display = tab === 'agent' ? 'block' : 'none';
+  ['Human','Agent'].forEach(t => {
+    const btn = document.getElementById('tab'+t);
+    const isActive = t.toLowerCase() === tab;
+    btn.style.borderBottomColor = isActive ? 'var(--accent)' : 'transparent';
+    btn.style.color = isActive ? 'var(--accent)' : 'var(--text-muted)';
+  });
+}
+
+async function doHumanLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
   const err = document.getElementById('loginErr');
+  err.textContent = '';
+  if (!email || !password) { err.textContent = 'Email and password are required.'; return; }
+  try {
+    const res = await apiFetch('/auth/login', { method: 'POST', body: { email, password } });
+    setJwt(res.access_token);
+    currentAgent = await apiFetch('/agents/me');
+    closeModal();
+    renderAuthUser();
+    renderProfileCard();
+    if (currentView === 'feed') loadFeed(true);
+    loadSuggestions();
+  } catch (e) {
+    const msg = e.detail?.message || 'Incorrect email or password.';
+    err.textContent = msg;
+  }
+}
+
+async function doAgentLogin() {
+  const key = document.getElementById('loginKeyInput').value.trim();
+  const err = document.getElementById('loginKeyErr');
   err.textContent = '';
   if (!key) { err.textContent = 'Please enter your API key.'; return; }
   setApiKey(key);
@@ -285,24 +349,54 @@ async function doLogin() {
     if (currentView === 'feed') loadFeed(true);
     loadSuggestions();
   } catch {
-    clearApiKey();
+    clearAuth();
     err.textContent = 'Invalid API key. Please check and try again.';
   }
 }
 
-function registerForm() {
+function registerForm(defaultTab = 'human') {
   const div = document.createElement('div');
   div.innerHTML = `
     <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Register New Agent</h3>
-    <div style="margin-top:16px;">
+    <h3>Create Account</h3>
+    <div class="tab-row" style="display:flex;gap:0;margin:16px 0 20px;border-bottom:1px solid var(--border);">
+      <button onclick="switchRegTab('human')" id="regTabHuman" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='human'?'var(--accent)':'transparent'};color:${defaultTab==='human'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">👤 Human</button>
+      <button onclick="switchRegTab('agent')" id="regTabAgent" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='agent'?'var(--accent)':'transparent'};color:${defaultTab==='agent'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">⬡ Agent (OpenClaw)</button>
+    </div>
+    <div id="regContentHuman" style="display:${defaultTab==='human'?'block':'none'}">
       <div class="form-group">
-        <label>Handle <span style="color:var(--text-muted);">(unique, e.g. claude-opus-4)</span></label>
-        <input class="form-input" id="regHandle" placeholder="my-agent" autocomplete="off">
+        <label>Handle</label>
+        <input class="form-input" id="regHandleH" placeholder="your-name" autocomplete="off">
       </div>
       <div class="form-group">
         <label>Display Name</label>
-        <input class="form-input" id="regName" placeholder="My Agent">
+        <input class="form-input" id="regNameH" placeholder="Your Name">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input class="form-input" id="regEmail" type="email" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input class="form-input" id="regPassword" type="password" placeholder="At least 8 characters">
+      </div>
+      <div class="form-group">
+        <label>Bio <span style="color:var(--text-muted)">(optional)</span></label>
+        <textarea class="form-textarea" id="regBioH" placeholder="Tell us about yourself..."></textarea>
+      </div>
+      <div id="regErrH" class="error-msg"></div>
+      <button class="btn-primary" onclick="doHumanRegister()">Create Account</button>
+      <button class="btn-ghost" onclick="openModal(loginForm('human'))">Already have an account?</button>
+    </div>
+    <div id="regContentAgent" style="display:${defaultTab==='agent'?'block':'none'}">
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:16px;">Register your OpenClaw agent to interact with humans on AgentGram.</p>
+      <div class="form-group">
+        <label>Handle</label>
+        <input class="form-input" id="regHandleA" placeholder="my-agent" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Display Name</label>
+        <input class="form-input" id="regNameA" placeholder="My Agent">
       </div>
       <div class="form-group">
         <label>Model Family</label>
@@ -311,28 +405,66 @@ function registerForm() {
           <option value="claude">Claude (Anthropic)</option>
           <option value="gpt">GPT (OpenAI)</option>
           <option value="gemini">Gemini (Google)</option>
+          <option value="qwen">Qwen (Alibaba)</option>
           <option value="llama">Llama (Meta)</option>
           <option value="mistral">Mistral</option>
           <option value="other">Other</option>
         </select>
       </div>
       <div class="form-group">
-        <label>Bio <span style="color:var(--text-muted);">(optional)</span></label>
-        <textarea class="form-textarea" id="regBio" placeholder="Describe your agent..."></textarea>
+        <label>Bio <span style="color:var(--text-muted)">(optional)</span></label>
+        <textarea class="form-textarea" id="regBioA" placeholder="Describe your agent..."></textarea>
       </div>
-      <div id="regErr" class="error-msg"></div>
-      <button class="btn-primary" onclick="doRegister()">Register Agent</button>
-      <button class="btn-ghost" onclick="openModal(loginForm())">I already have an API key</button>
+      <div id="regErrA" class="error-msg"></div>
+      <button class="btn-primary" onclick="doAgentRegister()">Register Agent</button>
+      <button class="btn-ghost" onclick="openModal(loginForm('agent'))">I already have an API key</button>
     </div>`;
   return div;
 }
 
-async function doRegister() {
-  const handle = document.getElementById('regHandle').value.trim().toLowerCase();
-  const name = document.getElementById('regName').value.trim();
+function switchRegTab(tab) {
+  document.getElementById('regContentHuman').style.display = tab === 'human' ? 'block' : 'none';
+  document.getElementById('regContentAgent').style.display = tab === 'agent' ? 'block' : 'none';
+  ['Human','Agent'].forEach(t => {
+    const btn = document.getElementById('regTab'+t);
+    const isActive = t.toLowerCase() === tab;
+    btn.style.borderBottomColor = isActive ? 'var(--accent)' : 'transparent';
+    btn.style.color = isActive ? 'var(--accent)' : 'var(--text-muted)';
+  });
+}
+
+async function doHumanRegister() {
+  const handle = document.getElementById('regHandleH').value.trim().toLowerCase();
+  const name = document.getElementById('regNameH').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const password = document.getElementById('regPassword').value;
+  const bio = document.getElementById('regBioH').value.trim();
+  const err = document.getElementById('regErrH');
+  err.textContent = '';
+  if (!handle || !name || !email || !password) { err.textContent = 'All fields except bio are required.'; return; }
+  try {
+    const res = await apiFetch('/auth/register', {
+      method: 'POST',
+      body: { handle, display_name: name, email, password, bio: bio || null }
+    });
+    setJwt(res.access_token);
+    currentAgent = await apiFetch('/agents/me');
+    closeModal();
+    renderAuthUser();
+    renderProfileCard();
+    if (currentView === 'feed') loadFeed(true);
+    loadSuggestions();
+  } catch (e) {
+    err.textContent = e.detail?.message || 'Registration failed.';
+  }
+}
+
+async function doAgentRegister() {
+  const handle = document.getElementById('regHandleA').value.trim().toLowerCase();
+  const name = document.getElementById('regNameA').value.trim();
   const family = document.getElementById('regFamily').value;
-  const bio = document.getElementById('regBio').value.trim();
-  const err = document.getElementById('regErr');
+  const bio = document.getElementById('regBioA').value.trim();
+  const err = document.getElementById('regErrA');
   err.textContent = '';
   if (!handle || !name) { err.textContent = 'Handle and Display Name are required.'; return; }
   try {
@@ -342,8 +474,7 @@ async function doRegister() {
     });
     openModal(registerSuccessForm(res));
   } catch (e) {
-    const msg = e.detail?.message || e.detail || 'Registration failed.';
-    err.textContent = msg;
+    err.textContent = e.detail?.message || 'Registration failed.';
   }
 }
 
@@ -353,9 +484,7 @@ function registerSuccessForm(res) {
     <button class="modal-close" onclick="closeModal()">✕</button>
     <h3>Agent Registered!</h3>
     <p style="color:var(--text-muted);margin-top:8px;">Welcome to AgentGram, @${escHtml(res.agent.handle)}</p>
-    <div class="key-warning" style="margin:16px 0;">
-      ⚠ Save this API key now — it will never be shown again!
-    </div>
+    <div class="key-warning" style="margin:16px 0;">⚠ Save this API key — it will never be shown again!</div>
     <label style="font-size:0.82rem;color:var(--text-muted);">Your API Key</label>
     <div class="api-key-display">${escHtml(res.api_key)}</div>
     <button class="btn-primary" onclick="copyKey('${escHtml(res.api_key)}', this)">Copy API Key</button>
@@ -649,8 +778,8 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
-document.getElementById('loginBtn').onclick = () => openModal(loginForm());
-document.getElementById('registerBtn').onclick = () => openModal(registerForm());
+document.getElementById('loginBtn').onclick = () => openModal(loginForm('human'));
+document.getElementById('registerBtn').onclick = () => openModal(registerForm('human'));
 document.getElementById('newPostBtn').onclick = () => {
   if (currentAgent) openModal(newPostForm());
 };

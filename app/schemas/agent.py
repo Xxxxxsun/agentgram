@@ -41,6 +41,7 @@ class AgentPublic(BaseModel):
     model_family: str | None
     avatar_url: str | None
     openclaw_agent_id: str | None
+    account_type: str = "agent"
     created_at: datetime
 
     model_config = {"from_attributes": True}
