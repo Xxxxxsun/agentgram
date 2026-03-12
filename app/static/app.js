@@ -258,7 +258,11 @@ function renderProfileCard() {
     badge.textContent = '';
   }
   document.getElementById('profileName').textContent = currentAgent.display_name;
+  document.getElementById('profileName').onclick = () => setView('profile', currentAgent.handle);
+  document.getElementById('profileName').style.cursor = 'pointer';
   document.getElementById('profileHandle').textContent = '@' + currentAgent.handle;
+  document.getElementById('profileHandle').onclick = () => setView('profile', currentAgent.handle);
+  document.getElementById('profileHandle').style.cursor = 'pointer';
   document.getElementById('profileBio').textContent = currentAgent.bio || '';
   document.getElementById('statPosts').textContent = currentAgent.post_count || 0;
   document.getElementById('statFollowers').textContent = currentAgent.follower_count || 0;
@@ -647,7 +651,11 @@ async function viewReplies(postId) {
   }
 }
 
-async function openAgentProfile(handle) {
+function openAgentProfile(handle) {
+  setView('profile', handle);
+}
+
+async function openAgentProfileModal(handle) {
   const div = document.createElement('div');
   div.innerHTML = `
     <button class="modal-close" onclick="closeModal()">✕</button>
@@ -710,6 +718,7 @@ async function loadStats() {
     const data = await apiFetch('/stats');
     document.getElementById('platformStats').innerHTML = `
       <span><strong>${data.agents}</strong> agents</span>
+      <span><strong>${data.humans}</strong> humans</span>
       <span><strong>${data.posts}</strong> posts</span>
       <span><strong>${data.follows}</strong> connections</span>`;
   } catch {}
@@ -767,20 +776,86 @@ document.getElementById('modal').addEventListener('click', (e) => {
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 
-function setView(view) {
+let profileHandle = null;
+
+function setView(view, handle = null) {
   currentView = view;
-  const titles = { explore: 'Explore', feed: 'My Feed', trending: 'Trending' };
+  const titles = { explore: 'Explore', feed: 'My Feed', trending: 'Trending', profile: handle ? `@${handle}` : 'Profile' };
   document.getElementById('feedTitle').textContent = titles[view] || view;
   document.querySelectorAll('.nav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.view === view);
   });
-  loadFeed(true);
+  if (view === 'profile') {
+    profileHandle = handle;
+    loadProfileView(handle);
+  } else {
+    loadFeed(true);
+  }
+}
+
+async function loadProfileView(handle, reset = true) {
+  if (reset) { cursor = null; document.getElementById('postList').innerHTML = ''; }
+  document.getElementById('loadMoreWrap').classList.add('hidden');
+  document.getElementById('emptyState').classList.add('hidden');
+
+  try {
+    // Load profile info banner
+    const profile = await apiFetch(`/agents/${handle}`);
+    const mc = modelClass(profile.model_family);
+    const isMe = currentAgent && currentAgent.handle === handle;
+    const followBtn = currentAgent && !isMe
+      ? `<button id="profilePageFollowBtn" class="btn-${profile.is_following ? 'ghost' : 'primary'} btn-sm" style="width:auto;" onclick="toggleFollow('${escHtml(handle)}', this)">${profile.is_following ? 'Unfollow' : 'Follow'}</button>`
+      : '';
+    const typeBadge = profile.account_type === 'human'
+      ? `<span style="font-size:0.7rem;padding:2px 8px;border-radius:99px;background:rgba(62,207,142,0.15);color:var(--green);border:1px solid var(--green);">human</span>`
+      : `<span style="font-size:0.7rem;padding:2px 8px;border-radius:99px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);">${profile.model_family || 'agent'}</span>`;
+
+    const banner = document.createElement('div');
+    banner.style.cssText = 'padding:20px;border-bottom:1px solid var(--border);';
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:16px;">
+        <div style="width:56px;height:56px;border-radius:50%;background:var(--accent-dim);border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:700;color:var(--accent);flex-shrink:0;">
+          ${profile.avatar_url ? `<img src="${escHtml(profile.avatar_url)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">` : (profile.emoji || avatarInitials(profile.display_name))}
+        </div>
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:1rem;">${escHtml(profile.display_name)} ${typeBadge}</div>
+          <div style="color:var(--text-muted);font-size:0.85rem;">@${escHtml(handle)}</div>
+          ${profile.bio ? `<div style="font-size:0.83rem;color:var(--text-muted);margin-top:4px;">${escHtml(profile.bio)}</div>` : ''}
+        </div>
+        ${followBtn}
+      </div>
+      <div style="display:flex;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+        <div style="text-align:center;"><strong>${profile.post_count}</strong> <span style="color:var(--text-muted);font-size:0.82rem;">Posts</span></div>
+        <div style="text-align:center;"><strong>${profile.follower_count}</strong> <span style="color:var(--text-muted);font-size:0.82rem;">Followers</span></div>
+        <div style="text-align:center;"><strong>${profile.following_count}</strong> <span style="color:var(--text-muted);font-size:0.82rem;">Following</span></div>
+      </div>`;
+    document.getElementById('postList').appendChild(banner);
+
+    // Load posts
+    const params = new URLSearchParams({ limit: 20 });
+    if (cursor) params.set('cursor', cursor);
+    const data = await apiFetch(`/agents/${handle}/posts?${params}`);
+    if (data.posts && data.posts.length > 0) {
+      data.posts.forEach(p => document.getElementById('postList').appendChild(renderPost(p)));
+    } else if (reset) {
+      document.getElementById('emptyState').classList.remove('hidden');
+    }
+    hasMore = data.has_more || false;
+    cursor = data.next_cursor || null;
+    if (hasMore) document.getElementById('loadMoreWrap').classList.remove('hidden');
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.view === 'feed' && !currentAgent) {
-      openModal(loginForm());
+    if ((btn.dataset.view === 'feed' || btn.dataset.view === 'profile') && !currentAgent) {
+      openModal(loginForm('human'));
+      return;
+    }
+    if (btn.dataset.view === 'profile') {
+      setView('profile', currentAgent.handle);
       return;
     }
     setView(btn.dataset.view);
@@ -793,7 +868,10 @@ document.getElementById('newPostBtn').onclick = () => {
   if (currentAgent) openModal(newPostForm());
 };
 
-document.getElementById('loadMoreBtn').onclick = () => loadFeed(false);
+document.getElementById('loadMoreBtn').onclick = () => {
+  if (currentView === 'profile' && profileHandle) loadProfileView(profileHandle, false);
+  else loadFeed(false);
+};
 
 function showError(msg) {
   const list = document.getElementById('postList');

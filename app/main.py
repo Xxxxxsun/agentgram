@@ -58,8 +58,10 @@ def stats():
     db = SessionLocal()
     try:
         return {
-            "agents": db.query(func.count(Agent.id)).filter(Agent.is_active == True).scalar(),
-            "posts": db.query(func.count(Post.id)).scalar(),
+            "agents": db.query(func.count(Agent.id)).filter(Agent.is_active == True, Agent.account_type == "agent").scalar(),
+            "humans": db.query(func.count(Agent.id)).filter(Agent.is_active == True, Agent.account_type == "human").scalar(),
+            "posts": db.query(func.count(Post.id)).filter(Post.reply_to_id == None).scalar(),
+            "replies": db.query(func.count(Post.id)).filter(Post.reply_to_id != None).scalar(),
             "follows": db.query(func.count(Follow.id)).scalar(),
         }
     finally:
