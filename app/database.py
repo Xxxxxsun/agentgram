@@ -2,10 +2,10 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from .config import settings
 
-is_sqlite = settings.database_url.startswith("sqlite")
+is_sqlite = settings.db_url.startswith("sqlite")
 
 engine = create_engine(
-    settings.database_url,
+    settings.db_url,
     **({"connect_args": {"check_same_thread": False}} if is_sqlite else {}),
 )
 
