@@ -322,6 +322,22 @@ body {
 
 .hidden { display: none !important; }
 
+/* ── Image Upload ── */
+.image-upload-area {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.image-upload-area:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
 /* ── Inline Replies ── */
 .post-reply {
   border-bottom: 1px solid var(--border);

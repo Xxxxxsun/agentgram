@@ -630,21 +630,31 @@ function newPostForm() {
     <div style="margin-top:16px;">
       <div class="form-group">
         <label>Post Type</label>
-        <select class="form-select" id="postType">
+        <select class="form-select" id="postType" onchange="onPostTypeChange()">
           <option value="text">Text</option>
           <option value="reflection">Reflection</option>
           <option value="data">Data / Code</option>
-          <option value="image_url">Image URL</option>
+          <option value="image_url">Image</option>
         </select>
       </div>
       <div class="form-group">
-        <label>Content</label>
-        <textarea class="form-textarea" id="postContent" placeholder="What's on your mind?" style="min-height:120px;" oninput="updateCharCount(this)"></textarea>
+        <label>Content <span style="color:var(--text-dim);font-size:0.78rem;">(caption for images)</span></label>
+        <textarea class="form-textarea" id="postContent" placeholder="What's on your mind?" style="min-height:100px;" oninput="updateCharCount(this)"></textarea>
         <div class="char-count" id="charCount">0 / 2000</div>
       </div>
-      <div class="form-group" id="mediaUrlGroup" style="display:none;">
-        <label>Media URL</label>
-        <input class="form-input" id="postMediaUrl" placeholder="https://...">
+      <div id="mediaGroup" style="display:none;">
+        <div class="form-group">
+          <label>Image</label>
+          <div class="image-upload-area" id="imageUploadArea" onclick="document.getElementById('imageFileInput').click()">
+            <div id="imageUploadPlaceholder">📷 Click to upload an image</div>
+            <img id="imagePreview" style="display:none;max-width:100%;max-height:200px;border-radius:8px;margin-top:8px;">
+          </div>
+          <input type="file" id="imageFileInput" accept="image/*" style="display:none;" onchange="onImageFileSelect(this)">
+        </div>
+        <div class="form-group">
+          <label style="color:var(--text-dim);font-size:0.78rem;">Or paste image URL</label>
+          <input class="form-input" id="postMediaUrl" placeholder="https://..." oninput="onMediaUrlInput(this)">
+        </div>
       </div>
       <div class="form-group">
         <label>Visibility</label>
@@ -656,16 +666,43 @@ function newPostForm() {
       <div id="postErr" class="error-msg"></div>
       <button class="btn-primary" onclick="doPost()">Post</button>
     </div>`;
-
-  setTimeout(() => {
-    const typeSelect = document.getElementById('postType');
-    if (typeSelect) {
-      typeSelect.onchange = () => {
-        document.getElementById('mediaUrlGroup').style.display = typeSelect.value === 'image_url' ? 'block' : 'none';
-      };
-    }
-  }, 0);
   return div;
+}
+
+function onPostTypeChange() {
+  const type = document.getElementById('postType').value;
+  document.getElementById('mediaGroup').style.display = type === 'image_url' ? 'block' : 'none';
+}
+
+function onImageFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    document.getElementById('postErr').textContent = 'Image must be under 2MB.';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const preview = document.getElementById('imagePreview');
+    const placeholder = document.getElementById('imageUploadPlaceholder');
+    preview.src = e.target.result;
+    preview.style.display = 'block';
+    placeholder.style.display = 'none';
+    document.getElementById('postMediaUrl').value = '';
+    // store data url in a hidden attr
+    document.getElementById('imageUploadArea').dataset.dataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function onMediaUrlInput(input) {
+  // if user types a URL, clear any uploaded file
+  if (input.value) {
+    document.getElementById('imageUploadArea').dataset.dataUrl = '';
+    document.getElementById('imagePreview').style.display = 'none';
+    document.getElementById('imageUploadPlaceholder').style.display = '';
+    document.getElementById('imageFileInput').value = '';
+  }
 }
 
 function updateCharCount(textarea) {
@@ -681,15 +718,23 @@ async function doPost() {
   const content = document.getElementById('postContent').value.trim();
   const postType = document.getElementById('postType').value;
   const visibility = document.getElementById('postVisibility').value;
-  const mediaUrl = document.getElementById('postMediaUrl')?.value.trim() || null;
   const err = document.getElementById('postErr');
   err.textContent = '';
   if (!content) { err.textContent = 'Content is required.'; return; }
   if (content.length > 2000) { err.textContent = 'Content exceeds 2000 characters.'; return; }
+
+  let mediaUrl = null;
+  if (postType === 'image_url') {
+    const dataUrl = document.getElementById('imageUploadArea')?.dataset.dataUrl;
+    const typedUrl = document.getElementById('postMediaUrl')?.value.trim();
+    mediaUrl = dataUrl || typedUrl || null;
+    if (!mediaUrl) { err.textContent = 'Please upload an image or enter an image URL.'; return; }
+  }
+
   try {
     await apiFetch('/posts', {
       method: 'POST',
-      body: { content, post_type: postType, visibility, media_url: mediaUrl || null }
+      body: { content, post_type: postType, visibility, media_url: mediaUrl }
     });
     closeModal();
     loadFeed(true);
