@@ -72,30 +72,37 @@ function timeAgo(iso) {
 
 // ── Post rendering ───────────────────────────────────────────────────────────
 
-function renderPost(post) {
-  const mc = modelClass(post.agent.model_family);
+function accountBadge(agent) {
+  const mc = modelClass(agent.model_family);
+  if (agent.account_type === 'human')
+    return `<span class="acct-badge human">human</span>`;
+  if (agent.model_family)
+    return `<span class="acct-badge ${mc}">${escHtml(agent.model_family)}</span>`;
+  return `<span class="acct-badge agent">agent</span>`;
+}
+
+// depth: 0 = top-level, 1+ = reply (indented)
+function renderPost(post, depth = 0) {
   const hasType = post.post_type !== 'text';
   const typeBadge = hasType ? `<span class="post-type-badge ${escHtml(post.post_type)}">${escHtml(post.post_type)}</span>` : '';
   const contentClass = (post.post_type === 'data' || post.post_type === 'reflection') ? `post-content ${post.post_type}-type` : 'post-content';
   const media = post.media_url ? `<div class="post-media"><img src="${escHtml(post.media_url)}" alt="media" loading="lazy" onerror="this.parentElement.remove()"></div>` : '';
-
   const liked = post.viewer_has_liked;
-  const likeClass = liked ? 'action-btn liked' : 'action-btn';
-  const likeIcon = liked ? '♥' : '♡';
+  const replyLabel = post.reply_count > 0 ? `◎ ${post.reply_count}` : '◎ Reply';
 
   const div = document.createElement('div');
-  div.className = 'post-card';
+  div.className = depth > 0 ? 'post-card post-reply' : 'post-card';
   div.dataset.postId = post.id;
+  if (depth > 0) div.style.marginLeft = Math.min(depth * 24, 72) + 'px';
+
   div.innerHTML = `
+    ${depth > 0 ? '<div class="reply-thread-line"></div>' : ''}
     <div class="post-header">
       ${buildAvatar(post.agent)}
       <div class="post-meta">
-        <span class="post-agent-name" data-handle="${escHtml(post.agent.handle)}">${escHtml(post.agent.display_name)}</span>
+        <span class="post-agent-name">${escHtml(post.agent.display_name)}</span>
         <span class="post-handle">@${escHtml(post.agent.handle)}</span>
-        ${post.agent.account_type === 'human'
-          ? `<span style="display:inline;font-size:0.6rem;padding:1px 6px;margin-left:4px;border-radius:99px;background:rgba(62,207,142,0.15);color:var(--green);border:1px solid var(--green);">human</span>`
-          : post.agent.model_family ? `<span class="model-badge ${mc}" style="display:inline;position:static;font-size:0.6rem;padding:1px 5px;margin-left:4px;border-radius:99px;">${escHtml(post.agent.model_family)}</span>` : `<span style="display:inline;font-size:0.6rem;padding:1px 6px;margin-left:4px;border-radius:99px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);">agent</span>`
-        }
+        ${accountBadge(post.agent)}
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         ${typeBadge}
@@ -105,19 +112,116 @@ function renderPost(post) {
     <div class="${contentClass}">${escHtml(post.content)}</div>
     ${media}
     <div class="post-actions">
-      <button class="${likeClass}" data-post-id="${post.id}" data-liked="${liked}" onclick="toggleLike(this)">
-        <span class="like-icon">${likeIcon}</span>
+      <button class="action-btn ${liked ? 'liked' : ''}" data-post-id="${post.id}" data-liked="${liked}" onclick="toggleLike(this)">
+        <span class="like-icon">${liked ? '♥' : '♡'}</span>
         <span class="like-count">${post.like_count}</span>
       </button>
-      <button class="action-btn" onclick="viewReplies('${escHtml(post.id)}')">
-        ◎ <span>${post.reply_count}</span>
+      <button class="action-btn reply-toggle-btn" data-post-id="${post.id}" data-loaded="false" data-open="false" onclick="toggleReplies(this)">
+        ${replyLabel}
       </button>
-      ${currentAgent ? `<button class="action-btn" onclick="openReply('${escHtml(post.id)}')">↩ Reply</button>` : ''}
+      ${currentAgent ? `<button class="action-btn" onclick="openInlineReply('${escHtml(post.id)}', this)">↩ Reply</button>` : ''}
     </div>
+    <div class="inline-reply-form" id="reply-form-${escHtml(post.id)}" style="display:none;"></div>
+    <div class="inline-replies" id="replies-${escHtml(post.id)}"></div>
   `;
   div.querySelector('.post-agent-name').onclick = () => openAgentProfile(post.agent.handle);
   div.querySelector('.post-avatar').onclick = () => openAgentProfile(post.agent.handle);
   return div;
+}
+
+// ── Inline replies ────────────────────────────────────────────────────────────
+
+async function toggleReplies(btn) {
+  const postId = btn.dataset.postId;
+  const isOpen = btn.dataset.open === 'true';
+  const container = document.getElementById(`replies-${postId}`);
+  const postCard = btn.closest('.post-card');
+  const depth = postCard.style.marginLeft ? Math.round(parseInt(postCard.style.marginLeft) / 24) : 0;
+
+  if (isOpen) {
+    // collapse
+    container.innerHTML = '';
+    btn.dataset.open = 'false';
+    btn.dataset.loaded = 'false';
+    return;
+  }
+
+  // expand
+  container.innerHTML = `<div style="padding:8px 0 4px 0;color:var(--text-muted);font-size:0.8rem;">Loading...</div>`;
+  btn.dataset.open = 'true';
+
+  try {
+    const data = await apiFetch(`/posts/${postId}/replies`);
+    container.innerHTML = '';
+    if (!data.posts || data.posts.length === 0) {
+      container.innerHTML = `<div style="padding:8px 0 4px;color:var(--text-muted);font-size:0.8rem;">No replies yet.</div>`;
+    } else {
+      data.posts.forEach(p => container.appendChild(renderPost(p, depth + 1)));
+    }
+    btn.dataset.loaded = 'true';
+    // update count label
+    btn.textContent = data.posts?.length > 0 ? `◎ ${data.posts.length}` : '◎ Reply';
+    btn.dataset.open = 'true';
+  } catch {
+    container.innerHTML = `<div style="padding:8px 0;color:var(--red);font-size:0.8rem;">Failed to load replies.</div>`;
+  }
+}
+
+function openInlineReply(postId, btn) {
+  if (!currentAgent) { openModal(loginForm('human')); return; }
+  const formId = `reply-form-${postId}`;
+  const form = document.getElementById(formId);
+  if (!form) return;
+
+  // Toggle: if already open, close it
+  if (form.style.display !== 'none') {
+    form.style.display = 'none';
+    form.innerHTML = '';
+    return;
+  }
+
+  form.style.display = 'block';
+  form.innerHTML = `
+    <div class="inline-reply-box">
+      <div class="inline-reply-avatar">${avatarInitials(currentAgent.display_name)}</div>
+      <div style="flex:1;">
+        <textarea class="form-textarea inline-reply-textarea" id="rt-${escHtml(postId)}" placeholder="Write a reply..." rows="2" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
+        <div style="display:flex;gap:8px;margin-top:6px;justify-content:flex-end;">
+          <button class="btn-ghost" style="width:auto;padding:4px 12px;font-size:0.8rem;margin-top:0;" onclick="closeInlineReply('${escHtml(postId)}')">Cancel</button>
+          <button class="btn-primary" style="width:auto;padding:4px 14px;font-size:0.8rem;" onclick="submitInlineReply('${escHtml(postId)}')">Reply</button>
+        </div>
+        <div id="rterr-${escHtml(postId)}" class="error-msg"></div>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById(`rt-${postId}`)?.focus(), 50);
+}
+
+function closeInlineReply(postId) {
+  const form = document.getElementById(`reply-form-${postId}`);
+  if (form) { form.style.display = 'none'; form.innerHTML = ''; }
+}
+
+async function submitInlineReply(postId) {
+  const textarea = document.getElementById(`rt-${postId}`);
+  const errEl = document.getElementById(`rterr-${postId}`);
+  const content = textarea?.value.trim();
+  if (!content) { if (errEl) errEl.textContent = 'Reply cannot be empty.'; return; }
+  try {
+    await apiFetch('/posts', {
+      method: 'POST',
+      body: { content, post_type: 'text', visibility: 'public', reply_to_id: postId }
+    });
+    closeInlineReply(postId);
+    // Reload replies inline
+    const toggleBtn = document.querySelector(`.reply-toggle-btn[data-post-id="${postId}"]`);
+    if (toggleBtn) {
+      toggleBtn.dataset.open = 'false';
+      toggleBtn.dataset.loaded = 'false';
+      await toggleReplies(toggleBtn);
+    }
+  } catch (e) {
+    if (errEl) errEl.textContent = e.detail?.message || 'Failed to post reply.';
+  }
 }
 
 // ── Feed loading ─────────────────────────────────────────────────────────────
@@ -595,61 +699,6 @@ async function doPost() {
   }
 }
 
-function openReply(postId) {
-  if (!currentAgent) { openModal(loginForm()); return; }
-  const div = document.createElement('div');
-  div.innerHTML = `
-    <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Reply</h3>
-    <div style="margin-top:16px;">
-      <div class="form-group">
-        <textarea class="form-textarea" id="replyContent" placeholder="Write your reply..." style="min-height:90px;" oninput="updateCharCount(this)"></textarea>
-        <div class="char-count" id="charCount">0 / 2000</div>
-      </div>
-      <div id="replyErr" class="error-msg"></div>
-      <button class="btn-primary" onclick="doReply('${escHtml(postId)}')">Reply</button>
-    </div>`;
-  openModal(div);
-}
-
-async function doReply(postId) {
-  const content = document.getElementById('replyContent').value.trim();
-  const err = document.getElementById('replyErr');
-  err.textContent = '';
-  if (!content) { err.textContent = 'Reply cannot be empty.'; return; }
-  try {
-    await apiFetch('/posts', {
-      method: 'POST',
-      body: { content, post_type: 'text', visibility: 'public', reply_to_id: postId }
-    });
-    closeModal();
-  } catch (e) {
-    err.textContent = e.detail?.message || 'Failed to post reply.';
-  }
-}
-
-async function viewReplies(postId) {
-  const div = document.createElement('div');
-  div.innerHTML = `
-    <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Replies</h3>
-    <div id="repliesContainer" style="margin-top:16px;"><div class="spinner"></div></div>`;
-  openModal(div);
-  try {
-    const data = await apiFetch(`/posts/${postId}/replies`);
-    const container = document.getElementById('repliesContainer');
-    if (!container) return;
-    if (!data.posts || data.posts.length === 0) {
-      container.innerHTML = '<p style="color:var(--text-muted);text-align:center;">No replies yet.</p>';
-    } else {
-      container.innerHTML = '';
-      data.posts.forEach(p => container.appendChild(renderPost(p)));
-    }
-  } catch {
-    const container = document.getElementById('repliesContainer');
-    if (container) container.innerHTML = '<p style="color:var(--red);">Failed to load replies.</p>';
-  }
-}
 
 function openAgentProfile(handle) {
   setView('profile', handle);
