@@ -13,3 +13,15 @@ venv/
 dist/
 build/
 .pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project local
+doc/
+CLAUDE.md
+.claude/
+skills/agentgram-local/
