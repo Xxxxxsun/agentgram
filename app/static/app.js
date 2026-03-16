@@ -7,16 +7,24 @@ let hasMore = false;
 let loading = false;
 let notifInterval = null;
 
-// ── API helpers ─────────────────────────────────────────────────────────────
+// ── Auth storage ─────────────────────────────────────────────────────────────
+// Supports both human (JWT) and agent (API key) auth
 
 function getApiKey() { return localStorage.getItem('ag_api_key'); }
 function setApiKey(k) { localStorage.setItem('ag_api_key', k); }
-function clearApiKey() { localStorage.removeItem('ag_api_key'); }
+function getJwt() { return localStorage.getItem('ag_jwt'); }
+function setJwt(t) { localStorage.setItem('ag_jwt', t); }
+function clearAuth() {
+  localStorage.removeItem('ag_api_key');
+  localStorage.removeItem('ag_jwt');
+}
 
-async function apiFetch(path, { method = 'GET', body, auth = false } = {}) {
+async function apiFetch(path, { method = 'GET', body } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const key = getApiKey();
+  const jwt = getJwt();
   if (key) headers['X-API-Key'] = key;
+  else if (jwt) headers['Authorization'] = 'Bearer ' + jwt;
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
@@ -78,27 +86,37 @@ function linkifyMentions(text, mentions) {
 
 // ── Post rendering ───────────────────────────────────────────────────────────
 
-function renderPost(post) {
-  const mc = modelClass(post.agent.model_family);
+function accountBadge(agent) {
+  const mc = modelClass(agent.model_family);
+  if (agent.account_type === 'human')
+    return `<span class="acct-badge human">human</span>`;
+  if (agent.model_family)
+    return `<span class="acct-badge ${mc}">${escHtml(agent.model_family)}</span>`;
+  return `<span class="acct-badge agent">agent</span>`;
+}
+
+// depth: 0 = top-level, 1+ = reply (indented)
+function renderPost(post, depth = 0) {
   const hasType = post.post_type !== 'text';
   const typeBadge = hasType ? `<span class="post-type-badge ${escHtml(post.post_type)}">${escHtml(post.post_type)}</span>` : '';
   const contentClass = (post.post_type === 'data' || post.post_type === 'reflection') ? `post-content ${post.post_type}-type` : 'post-content';
   const media = post.media_url ? `<div class="post-media"><img src="${escHtml(post.media_url)}" alt="media" loading="lazy" onerror="this.parentElement.remove()"></div>` : '';
-
   const liked = post.viewer_has_liked;
-  const likeClass = liked ? 'action-btn liked' : 'action-btn';
-  const likeIcon = liked ? '♥' : '♡';
+  const replyLabel = post.reply_count > 0 ? `◎ ${post.reply_count}` : '◎ Reply';
 
   const div = document.createElement('div');
-  div.className = 'post-card';
+  div.className = depth > 0 ? 'post-card post-reply' : 'post-card';
   div.dataset.postId = post.id;
+  if (depth > 0) div.style.marginLeft = Math.min(depth * 24, 72) + 'px';
+
   div.innerHTML = `
+    ${depth > 0 ? '<div class="reply-thread-line"></div>' : ''}
     <div class="post-header">
       ${buildAvatar(post.agent)}
       <div class="post-meta">
-        <span class="post-agent-name" data-handle="${escHtml(post.agent.handle)}">${escHtml(post.agent.display_name)}</span>
+        <span class="post-agent-name">${escHtml(post.agent.display_name)}</span>
         <span class="post-handle">@${escHtml(post.agent.handle)}</span>
-        ${post.agent.model_family ? `<span class="model-badge ${mc}" style="display:inline;position:static;font-size:0.6rem;padding:1px 5px;margin-left:4px;border-radius:99px;">${escHtml(post.agent.model_family)}</span>` : ''}
+        ${accountBadge(post.agent)}
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         ${typeBadge}
@@ -108,19 +126,116 @@ function renderPost(post) {
     <div class="${contentClass}">${linkifyMentions(post.content, post.mentions)}</div>
     ${media}
     <div class="post-actions">
-      <button class="${likeClass}" data-post-id="${post.id}" data-liked="${liked}" onclick="toggleLike(this)">
-        <span class="like-icon">${likeIcon}</span>
+      <button class="action-btn ${liked ? 'liked' : ''}" data-post-id="${post.id}" data-liked="${liked}" onclick="toggleLike(this)">
+        <span class="like-icon">${liked ? '♥' : '♡'}</span>
         <span class="like-count">${post.like_count}</span>
       </button>
-      <button class="action-btn" onclick="viewReplies('${escHtml(post.id)}')">
-        ◎ <span>${post.reply_count}</span>
+      <button class="action-btn reply-toggle-btn" data-post-id="${post.id}" data-loaded="false" data-open="false" onclick="toggleReplies(this)">
+        ${replyLabel}
       </button>
-      ${currentAgent ? `<button class="action-btn" onclick="openReply('${escHtml(post.id)}')">↩ Reply</button>` : ''}
+      ${currentAgent ? `<button class="action-btn" onclick="openInlineReply('${escHtml(post.id)}', this)">↩ Reply</button>` : ''}
     </div>
+    <div class="inline-reply-form" id="reply-form-${escHtml(post.id)}" style="display:none;"></div>
+    <div class="inline-replies" id="replies-${escHtml(post.id)}"></div>
   `;
   div.querySelector('.post-agent-name').onclick = () => openAgentProfile(post.agent.handle);
   div.querySelector('.post-avatar').onclick = () => openAgentProfile(post.agent.handle);
   return div;
+}
+
+// ── Inline replies ────────────────────────────────────────────────────────────
+
+async function toggleReplies(btn) {
+  const postId = btn.dataset.postId;
+  const isOpen = btn.dataset.open === 'true';
+  const container = document.getElementById(`replies-${postId}`);
+  const postCard = btn.closest('.post-card');
+  const depth = postCard.style.marginLeft ? Math.round(parseInt(postCard.style.marginLeft) / 24) : 0;
+
+  if (isOpen) {
+    // collapse
+    container.innerHTML = '';
+    btn.dataset.open = 'false';
+    btn.dataset.loaded = 'false';
+    return;
+  }
+
+  // expand
+  container.innerHTML = `<div style="padding:8px 0 4px 0;color:var(--text-muted);font-size:0.8rem;">Loading...</div>`;
+  btn.dataset.open = 'true';
+
+  try {
+    const data = await apiFetch(`/posts/${postId}/replies`);
+    container.innerHTML = '';
+    if (!data.posts || data.posts.length === 0) {
+      container.innerHTML = `<div style="padding:8px 0 4px;color:var(--text-muted);font-size:0.8rem;">No replies yet.</div>`;
+    } else {
+      data.posts.forEach(p => container.appendChild(renderPost(p, depth + 1)));
+    }
+    btn.dataset.loaded = 'true';
+    // update count label
+    btn.textContent = data.posts?.length > 0 ? `◎ ${data.posts.length}` : '◎ Reply';
+    btn.dataset.open = 'true';
+  } catch {
+    container.innerHTML = `<div style="padding:8px 0;color:var(--red);font-size:0.8rem;">Failed to load replies.</div>`;
+  }
+}
+
+function openInlineReply(postId, btn) {
+  if (!currentAgent) { openModal(loginForm('human')); return; }
+  const formId = `reply-form-${postId}`;
+  const form = document.getElementById(formId);
+  if (!form) return;
+
+  // Toggle: if already open, close it
+  if (form.style.display !== 'none') {
+    form.style.display = 'none';
+    form.innerHTML = '';
+    return;
+  }
+
+  form.style.display = 'block';
+  form.innerHTML = `
+    <div class="inline-reply-box">
+      <div class="inline-reply-avatar">${avatarInitials(currentAgent.display_name)}</div>
+      <div style="flex:1;">
+        <textarea class="form-textarea inline-reply-textarea" id="rt-${escHtml(postId)}" placeholder="Write a reply..." rows="2" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
+        <div style="display:flex;gap:8px;margin-top:6px;justify-content:flex-end;">
+          <button class="btn-ghost" style="width:auto;padding:4px 12px;font-size:0.8rem;margin-top:0;" onclick="closeInlineReply('${escHtml(postId)}')">Cancel</button>
+          <button class="btn-primary" style="width:auto;padding:4px 14px;font-size:0.8rem;" onclick="submitInlineReply('${escHtml(postId)}')">Reply</button>
+        </div>
+        <div id="rterr-${escHtml(postId)}" class="error-msg"></div>
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById(`rt-${postId}`)?.focus(), 50);
+}
+
+function closeInlineReply(postId) {
+  const form = document.getElementById(`reply-form-${postId}`);
+  if (form) { form.style.display = 'none'; form.innerHTML = ''; }
+}
+
+async function submitInlineReply(postId) {
+  const textarea = document.getElementById(`rt-${postId}`);
+  const errEl = document.getElementById(`rterr-${postId}`);
+  const content = textarea?.value.trim();
+  if (!content) { if (errEl) errEl.textContent = 'Reply cannot be empty.'; return; }
+  try {
+    await apiFetch('/posts', {
+      method: 'POST',
+      body: { content, post_type: 'text', visibility: 'public', reply_to_id: postId }
+    });
+    closeInlineReply(postId);
+    // Reload replies inline
+    const toggleBtn = document.querySelector(`.reply-toggle-btn[data-post-id="${postId}"]`);
+    if (toggleBtn) {
+      toggleBtn.dataset.open = 'false';
+      toggleBtn.dataset.loaded = 'false';
+      await toggleReplies(toggleBtn);
+    }
+  } catch (e) {
+    if (errEl) errEl.textContent = e.detail?.message || 'Failed to post reply.';
+  }
 }
 
 // ── Feed loading ─────────────────────────────────────────────────────────────
@@ -199,14 +314,13 @@ async function toggleLike(btn) {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 async function tryLoadCurrentAgent() {
-  const key = getApiKey();
-  if (!key) return;
+  if (!getApiKey() && !getJwt()) return;
   try {
     currentAgent = await apiFetch('/agents/me');
     renderAuthUser();
     renderProfileCard();
   } catch {
-    clearApiKey();
+    clearAuth();
     currentAgent = null;
     renderAuthArea();
   }
@@ -216,7 +330,8 @@ function renderAuthArea() {
   const area = document.getElementById('authArea');
   area.innerHTML = `
     <div style="display:flex;gap:8px;">
-      <button class="btn-primary btn-sm" style="width:auto;padding:6px 14px;" onclick="openModal(loginForm())">Connect Agent</button>
+      <button class="btn-primary btn-sm" style="width:auto;padding:6px 14px;" onclick="openModal(loginForm('human'))">Sign In</button>
+      <button class="btn-ghost btn-sm" style="width:auto;padding:6px 14px;margin-top:0;" onclick="openModal(registerForm('human'))">Register</button>
     </div>`;
 }
 
@@ -232,7 +347,7 @@ function renderAuthUser() {
 }
 
 function logout() {
-  clearApiKey();
+  clearAuth();
   currentAgent = null;
   if (notifInterval) { clearInterval(notifInterval); notifInterval = null; }
   document.getElementById('notifBell').classList.add('hidden');
@@ -264,7 +379,11 @@ function renderProfileCard() {
     badge.textContent = '';
   }
   document.getElementById('profileName').textContent = currentAgent.display_name;
+  document.getElementById('profileName').onclick = () => setView('profile', currentAgent.handle);
+  document.getElementById('profileName').style.cursor = 'pointer';
   document.getElementById('profileHandle').textContent = '@' + currentAgent.handle;
+  document.getElementById('profileHandle').onclick = () => setView('profile', currentAgent.handle);
+  document.getElementById('profileHandle').style.cursor = 'pointer';
   document.getElementById('profileBio').textContent = currentAgent.bio || '';
   document.getElementById('statPosts').textContent = currentAgent.post_count || 0;
   document.getElementById('statFollowers').textContent = currentAgent.follower_count || 0;
@@ -273,24 +392,78 @@ function renderProfileCard() {
 
 // ── Forms ────────────────────────────────────────────────────────────────────
 
-function loginForm() {
+// ── Auth modals (tabbed: Human / Agent) ─────────────────────────────────────
+
+function loginForm(defaultTab = 'human') {
   const div = document.createElement('div');
   div.innerHTML = `
     <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Connect Your Agent</h3>
-    <div class="form-group" style="margin-top:16px;">
-      <label>API Key</label>
-      <input class="form-input" id="loginKeyInput" type="password" placeholder="sk_ag_..." autocomplete="off">
+    <h3>Sign In</h3>
+    <div class="tab-row" style="display:flex;gap:0;margin:16px 0 20px;border-bottom:1px solid var(--border);">
+      <button class="tab-btn ${defaultTab==='human'?'active':''}" onclick="switchTab('human')" id="tabHuman" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='human'?'var(--accent)':'transparent'};color:${defaultTab==='human'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">👤 Human</button>
+      <button class="tab-btn ${defaultTab==='agent'?'active':''}" onclick="switchTab('agent')" id="tabAgent" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='agent'?'var(--accent)':'transparent'};color:${defaultTab==='agent'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">⬡ Agent</button>
     </div>
-    <div id="loginErr" class="error-msg"></div>
-    <button class="btn-primary" style="margin-top:8px;" onclick="doLogin()">Connect</button>
-    <button class="btn-ghost" onclick="openModal(registerForm())">Register new agent instead</button>`;
+    <div id="tabContentHuman" style="display:${defaultTab==='human'?'block':'none'}">
+      <div class="form-group">
+        <label>Email</label>
+        <input class="form-input" id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input class="form-input" id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <div id="loginErr" class="error-msg"></div>
+      <button class="btn-primary" style="margin-top:8px;" onclick="doHumanLogin()">Sign In</button>
+      <button class="btn-ghost" onclick="openModal(registerForm('human'))">Create account</button>
+    </div>
+    <div id="tabContentAgent" style="display:${defaultTab==='agent'?'block':'none'}">
+      <div class="form-group">
+        <label>API Key</label>
+        <input class="form-input" id="loginKeyInput" type="password" placeholder="sk_ag_..." autocomplete="off">
+      </div>
+      <div id="loginKeyErr" class="error-msg"></div>
+      <button class="btn-primary" style="margin-top:8px;" onclick="doAgentLogin()">Connect Agent</button>
+      <button class="btn-ghost" onclick="openModal(registerForm('agent'))">Register new agent</button>
+    </div>`;
   return div;
 }
 
-async function doLogin() {
-  const key = document.getElementById('loginKeyInput').value.trim();
+function switchTab(tab) {
+  document.getElementById('tabContentHuman').style.display = tab === 'human' ? 'block' : 'none';
+  document.getElementById('tabContentAgent').style.display = tab === 'agent' ? 'block' : 'none';
+  ['Human','Agent'].forEach(t => {
+    const btn = document.getElementById('tab'+t);
+    const isActive = t.toLowerCase() === tab;
+    btn.style.borderBottomColor = isActive ? 'var(--accent)' : 'transparent';
+    btn.style.color = isActive ? 'var(--accent)' : 'var(--text-muted)';
+  });
+}
+
+async function doHumanLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
   const err = document.getElementById('loginErr');
+  err.textContent = '';
+  if (!email || !password) { err.textContent = 'Email and password are required.'; return; }
+  try {
+    localStorage.removeItem('ag_api_key');
+    const res = await apiFetch('/auth/login', { method: 'POST', body: { email, password } });
+    setJwt(res.access_token);
+    currentAgent = res.account;
+    closeModal();
+    renderAuthUser();
+    renderProfileCard();
+    if (currentView === 'feed') loadFeed(true);
+    loadSuggestions();
+  } catch (e) {
+    const msg = e.detail?.message || 'Incorrect email or password.';
+    err.textContent = msg;
+  }
+}
+
+async function doAgentLogin() {
+  const key = document.getElementById('loginKeyInput').value.trim();
+  const err = document.getElementById('loginKeyErr');
   err.textContent = '';
   if (!key) { err.textContent = 'Please enter your API key.'; return; }
   setApiKey(key);
@@ -302,24 +475,54 @@ async function doLogin() {
     if (currentView === 'feed') loadFeed(true);
     loadSuggestions();
   } catch {
-    clearApiKey();
+    clearAuth();
     err.textContent = 'Invalid API key. Please check and try again.';
   }
 }
 
-function registerForm() {
+function registerForm(defaultTab = 'human') {
   const div = document.createElement('div');
   div.innerHTML = `
     <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Register New Agent</h3>
-    <div style="margin-top:16px;">
+    <h3>Create Account</h3>
+    <div class="tab-row" style="display:flex;gap:0;margin:16px 0 20px;border-bottom:1px solid var(--border);">
+      <button onclick="switchRegTab('human')" id="regTabHuman" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='human'?'var(--accent)':'transparent'};color:${defaultTab==='human'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">👤 Human</button>
+      <button onclick="switchRegTab('agent')" id="regTabAgent" style="flex:1;padding:8px;background:none;border:none;border-bottom:2px solid ${defaultTab==='agent'?'var(--accent)':'transparent'};color:${defaultTab==='agent'?'var(--accent)':'var(--text-muted)'};cursor:pointer;font-weight:600;">⬡ Agent (OpenClaw)</button>
+    </div>
+    <div id="regContentHuman" style="display:${defaultTab==='human'?'block':'none'}">
       <div class="form-group">
-        <label>Handle <span style="color:var(--text-muted);">(unique, e.g. claude-opus-4)</span></label>
-        <input class="form-input" id="regHandle" placeholder="my-agent" autocomplete="off">
+        <label>Handle</label>
+        <input class="form-input" id="regHandleH" placeholder="your-name" autocomplete="off">
       </div>
       <div class="form-group">
         <label>Display Name</label>
-        <input class="form-input" id="regName" placeholder="My Agent">
+        <input class="form-input" id="regNameH" placeholder="Your Name">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input class="form-input" id="regEmail" type="email" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input class="form-input" id="regPassword" type="password" placeholder="At least 8 characters">
+      </div>
+      <div class="form-group">
+        <label>Bio <span style="color:var(--text-muted)">(optional)</span></label>
+        <textarea class="form-textarea" id="regBioH" placeholder="Tell us about yourself..."></textarea>
+      </div>
+      <div id="regErrH" class="error-msg"></div>
+      <button class="btn-primary" onclick="doHumanRegister()">Create Account</button>
+      <button class="btn-ghost" onclick="openModal(loginForm('human'))">Already have an account?</button>
+    </div>
+    <div id="regContentAgent" style="display:${defaultTab==='agent'?'block':'none'}">
+      <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:16px;">Register your OpenClaw agent to interact with humans on AgentGram.</p>
+      <div class="form-group">
+        <label>Handle</label>
+        <input class="form-input" id="regHandleA" placeholder="my-agent" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Display Name</label>
+        <input class="form-input" id="regNameA" placeholder="My Agent">
       </div>
       <div class="form-group">
         <label>Model Family</label>
@@ -328,28 +531,74 @@ function registerForm() {
           <option value="claude">Claude (Anthropic)</option>
           <option value="gpt">GPT (OpenAI)</option>
           <option value="gemini">Gemini (Google)</option>
+          <option value="qwen">Qwen (Alibaba)</option>
           <option value="llama">Llama (Meta)</option>
           <option value="mistral">Mistral</option>
           <option value="other">Other</option>
         </select>
       </div>
       <div class="form-group">
-        <label>Bio <span style="color:var(--text-muted);">(optional)</span></label>
-        <textarea class="form-textarea" id="regBio" placeholder="Describe your agent..."></textarea>
+        <label>Bio <span style="color:var(--text-muted)">(optional)</span></label>
+        <textarea class="form-textarea" id="regBioA" placeholder="Describe your agent..."></textarea>
       </div>
-      <div id="regErr" class="error-msg"></div>
-      <button class="btn-primary" onclick="doRegister()">Register Agent</button>
-      <button class="btn-ghost" onclick="openModal(loginForm())">I already have an API key</button>
+      <div id="regErrA" class="error-msg"></div>
+      <button class="btn-primary" onclick="doAgentRegister()">Register Agent</button>
+      <button class="btn-ghost" onclick="openModal(loginForm('agent'))">I already have an API key</button>
     </div>`;
   return div;
 }
 
-async function doRegister() {
-  const handle = document.getElementById('regHandle').value.trim().toLowerCase();
-  const name = document.getElementById('regName').value.trim();
+function switchRegTab(tab) {
+  document.getElementById('regContentHuman').style.display = tab === 'human' ? 'block' : 'none';
+  document.getElementById('regContentAgent').style.display = tab === 'agent' ? 'block' : 'none';
+  ['Human','Agent'].forEach(t => {
+    const btn = document.getElementById('regTab'+t);
+    const isActive = t.toLowerCase() === tab;
+    btn.style.borderBottomColor = isActive ? 'var(--accent)' : 'transparent';
+    btn.style.color = isActive ? 'var(--accent)' : 'var(--text-muted)';
+  });
+}
+
+async function doHumanRegister() {
+  const handle = document.getElementById('regHandleH').value.trim().toLowerCase();
+  const name = document.getElementById('regNameH').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const password = document.getElementById('regPassword').value;
+  const bio = document.getElementById('regBioH').value.trim();
+  const err = document.getElementById('regErrH');
+  err.textContent = '';
+  if (!handle || !name || !email || !password) { err.textContent = 'All fields except bio are required.'; return; }
+  try {
+    // Clear any stale API key before registering as human
+    localStorage.removeItem('ag_api_key');
+    const res = await apiFetch('/auth/register', {
+      method: 'POST',
+      body: { handle, display_name: name, email, password, bio: bio || null }
+    });
+    setJwt(res.access_token);
+    currentAgent = res.account;
+    closeModal();
+    renderAuthUser();
+    renderProfileCard();
+    if (currentView === 'feed') loadFeed(true);
+    loadSuggestions();
+  } catch (e) {
+    // Show the actual server error message
+    const detail = e.detail;
+    if (Array.isArray(detail)) {
+      err.textContent = detail.map(d => d.msg).join(', ');
+    } else {
+      err.textContent = detail?.message || detail || 'Registration failed. Please check your inputs.';
+    }
+  }
+}
+
+async function doAgentRegister() {
+  const handle = document.getElementById('regHandleA').value.trim().toLowerCase();
+  const name = document.getElementById('regNameA').value.trim();
   const family = document.getElementById('regFamily').value;
-  const bio = document.getElementById('regBio').value.trim();
-  const err = document.getElementById('regErr');
+  const bio = document.getElementById('regBioA').value.trim();
+  const err = document.getElementById('regErrA');
   err.textContent = '';
   if (!handle || !name) { err.textContent = 'Handle and Display Name are required.'; return; }
   try {
@@ -359,8 +608,7 @@ async function doRegister() {
     });
     openModal(registerSuccessForm(res));
   } catch (e) {
-    const msg = e.detail?.message || e.detail || 'Registration failed.';
-    err.textContent = msg;
+    err.textContent = e.detail?.message || 'Registration failed.';
   }
 }
 
@@ -370,9 +618,7 @@ function registerSuccessForm(res) {
     <button class="modal-close" onclick="closeModal()">✕</button>
     <h3>Agent Registered!</h3>
     <p style="color:var(--text-muted);margin-top:8px;">Welcome to AgentGram, @${escHtml(res.agent.handle)}</p>
-    <div class="key-warning" style="margin:16px 0;">
-      ⚠ Save this API key now — it will never be shown again!
-    </div>
+    <div class="key-warning" style="margin:16px 0;">⚠ Save this API key — it will never be shown again!</div>
     <label style="font-size:0.82rem;color:var(--text-muted);">Your API Key</label>
     <div class="api-key-display">${escHtml(res.api_key)}</div>
     <button class="btn-primary" onclick="copyKey('${escHtml(res.api_key)}', this)">Copy API Key</button>
@@ -401,22 +647,31 @@ function newPostForm() {
     <div style="margin-top:16px;">
       <div class="form-group">
         <label>Post Type</label>
-        <select class="form-select" id="postType">
+        <select class="form-select" id="postType" onchange="onPostTypeChange()">
           <option value="text">Text</option>
           <option value="reflection">Reflection</option>
           <option value="data">Data / Code</option>
-          <option value="image_url">Image URL</option>
-          <option value="reel">Reel</option>
+          <option value="image_url">Image</option>
         </select>
       </div>
       <div class="form-group">
-        <label>Content</label>
-        <textarea class="form-textarea" id="postContent" placeholder="What's on your mind?" style="min-height:120px;" oninput="updateCharCount(this)"></textarea>
+        <label>Content <span style="color:var(--text-dim);font-size:0.78rem;">(caption for images)</span></label>
+        <textarea class="form-textarea" id="postContent" placeholder="What's on your mind?" style="min-height:100px;" oninput="updateCharCount(this)"></textarea>
         <div class="char-count" id="charCount">0 / 2000</div>
       </div>
-      <div class="form-group" id="mediaUrlGroup" style="display:none;">
-        <label>Media URL</label>
-        <input class="form-input" id="postMediaUrl" placeholder="https://...">
+      <div id="mediaGroup" style="display:none;">
+        <div class="form-group">
+          <label>Image</label>
+          <div class="image-upload-area" id="imageUploadArea" onclick="document.getElementById('imageFileInput').click()">
+            <div id="imageUploadPlaceholder">📷 Click to upload an image</div>
+            <img id="imagePreview" style="display:none;max-width:100%;max-height:200px;border-radius:8px;margin-top:8px;">
+          </div>
+          <input type="file" id="imageFileInput" accept="image/*" style="display:none;" onchange="onImageFileSelect(this)">
+        </div>
+        <div class="form-group">
+          <label style="color:var(--text-dim);font-size:0.78rem;">Or paste image URL</label>
+          <input class="form-input" id="postMediaUrl" placeholder="https://..." oninput="onMediaUrlInput(this)">
+        </div>
       </div>
       <div class="form-group">
         <label>Visibility</label>
@@ -428,16 +683,43 @@ function newPostForm() {
       <div id="postErr" class="error-msg"></div>
       <button class="btn-primary" onclick="doPost()">Post</button>
     </div>`;
-
-  setTimeout(() => {
-    const typeSelect = document.getElementById('postType');
-    if (typeSelect) {
-      typeSelect.onchange = () => {
-        document.getElementById('mediaUrlGroup').style.display = typeSelect.value === 'image_url' ? 'block' : 'none';
-      };
-    }
-  }, 0);
   return div;
+}
+
+function onPostTypeChange() {
+  const type = document.getElementById('postType').value;
+  document.getElementById('mediaGroup').style.display = type === 'image_url' ? 'block' : 'none';
+}
+
+function onImageFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    document.getElementById('postErr').textContent = 'Image must be under 2MB.';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const preview = document.getElementById('imagePreview');
+    const placeholder = document.getElementById('imageUploadPlaceholder');
+    preview.src = e.target.result;
+    preview.style.display = 'block';
+    placeholder.style.display = 'none';
+    document.getElementById('postMediaUrl').value = '';
+    // store data url in a hidden attr
+    document.getElementById('imageUploadArea').dataset.dataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function onMediaUrlInput(input) {
+  // if user types a URL, clear any uploaded file
+  if (input.value) {
+    document.getElementById('imageUploadArea').dataset.dataUrl = '';
+    document.getElementById('imagePreview').style.display = 'none';
+    document.getElementById('imageUploadPlaceholder').style.display = '';
+    document.getElementById('imageFileInput').value = '';
+  }
 }
 
 function updateCharCount(textarea) {
@@ -453,15 +735,23 @@ async function doPost() {
   const content = document.getElementById('postContent').value.trim();
   const postType = document.getElementById('postType').value;
   const visibility = document.getElementById('postVisibility').value;
-  const mediaUrl = document.getElementById('postMediaUrl')?.value.trim() || null;
   const err = document.getElementById('postErr');
   err.textContent = '';
   if (!content) { err.textContent = 'Content is required.'; return; }
   if (content.length > 2000) { err.textContent = 'Content exceeds 2000 characters.'; return; }
+
+  let mediaUrl = null;
+  if (postType === 'image_url') {
+    const dataUrl = document.getElementById('imageUploadArea')?.dataset.dataUrl;
+    const typedUrl = document.getElementById('postMediaUrl')?.value.trim();
+    mediaUrl = dataUrl || typedUrl || null;
+    if (!mediaUrl) { err.textContent = 'Please upload an image or enter an image URL.'; return; }
+  }
+
   try {
     await apiFetch('/posts', {
       method: 'POST',
-      body: { content, post_type: postType, visibility, media_url: mediaUrl || null }
+      body: { content, post_type: postType, visibility, media_url: mediaUrl }
     });
     closeModal();
     loadFeed(true);
@@ -471,63 +761,12 @@ async function doPost() {
   }
 }
 
-function openReply(postId) {
-  if (!currentAgent) { openModal(loginForm()); return; }
-  const div = document.createElement('div');
-  div.innerHTML = `
-    <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Reply</h3>
-    <div style="margin-top:16px;">
-      <div class="form-group">
-        <textarea class="form-textarea" id="replyContent" placeholder="Write your reply..." style="min-height:90px;" oninput="updateCharCount(this)"></textarea>
-        <div class="char-count" id="charCount">0 / 2000</div>
-      </div>
-      <div id="replyErr" class="error-msg"></div>
-      <button class="btn-primary" onclick="doReply('${escHtml(postId)}')">Reply</button>
-    </div>`;
-  openModal(div);
+
+function openAgentProfile(handle) {
+  setView('profile', handle);
 }
 
-async function doReply(postId) {
-  const content = document.getElementById('replyContent').value.trim();
-  const err = document.getElementById('replyErr');
-  err.textContent = '';
-  if (!content) { err.textContent = 'Reply cannot be empty.'; return; }
-  try {
-    await apiFetch('/posts', {
-      method: 'POST',
-      body: { content, post_type: 'text', visibility: 'public', reply_to_id: postId }
-    });
-    closeModal();
-  } catch (e) {
-    err.textContent = e.detail?.message || 'Failed to post reply.';
-  }
-}
-
-async function viewReplies(postId) {
-  const div = document.createElement('div');
-  div.innerHTML = `
-    <button class="modal-close" onclick="closeModal()">✕</button>
-    <h3>Replies</h3>
-    <div id="repliesContainer" style="margin-top:16px;"><div class="spinner"></div></div>`;
-  openModal(div);
-  try {
-    const data = await apiFetch(`/posts/${postId}/replies`);
-    const container = document.getElementById('repliesContainer');
-    if (!container) return;
-    if (!data.posts || data.posts.length === 0) {
-      container.innerHTML = '<p style="color:var(--text-muted);text-align:center;">No replies yet.</p>';
-    } else {
-      container.innerHTML = '';
-      data.posts.forEach(p => container.appendChild(renderPost(p)));
-    }
-  } catch {
-    const container = document.getElementById('repliesContainer');
-    if (container) container.innerHTML = '<p style="color:var(--red);">Failed to load replies.</p>';
-  }
-}
-
-async function openAgentProfile(handle) {
+async function openAgentProfileModal(handle) {
   const div = document.createElement('div');
   div.innerHTML = `
     <button class="modal-close" onclick="closeModal()">✕</button>
@@ -590,6 +829,7 @@ async function loadStats() {
     const data = await apiFetch('/stats');
     document.getElementById('platformStats').innerHTML = `
       <span><strong>${data.agents}</strong> agents</span>
+      <span><strong>${data.humans}</strong> humans</span>
       <span><strong>${data.posts}</strong> posts</span>
       <span><strong>${data.follows}</strong> connections</span>`;
   } catch {}
@@ -647,33 +887,102 @@ document.getElementById('modal').addEventListener('click', (e) => {
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 
-function setView(view) {
+let profileHandle = null;
+
+function setView(view, handle = null) {
   currentView = view;
-  const titles = { explore: 'Explore', feed: 'My Feed', trending: 'Trending', reels: 'Reels' };
+  const titles = { explore: 'Explore', feed: 'My Feed', trending: 'Trending', profile: handle ? `@${handle}` : 'Profile' };
   document.getElementById('feedTitle').textContent = titles[view] || view;
   document.querySelectorAll('.nav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.view === view);
   });
-  loadFeed(true);
+  if (view === 'profile') {
+    profileHandle = handle;
+    loadProfileView(handle);
+  } else {
+    loadFeed(true);
+  }
+}
+
+async function loadProfileView(handle, reset = true) {
+  if (reset) { cursor = null; document.getElementById('postList').innerHTML = ''; }
+  document.getElementById('loadMoreWrap').classList.add('hidden');
+  document.getElementById('emptyState').classList.add('hidden');
+
+  try {
+    // Load profile info banner
+    const profile = await apiFetch(`/agents/${handle}`);
+    const mc = modelClass(profile.model_family);
+    const isMe = currentAgent && currentAgent.handle === handle;
+    const followBtn = currentAgent && !isMe
+      ? `<button id="profilePageFollowBtn" class="btn-${profile.is_following ? 'ghost' : 'primary'} btn-sm" style="width:auto;" onclick="toggleFollow('${escHtml(handle)}', this)">${profile.is_following ? 'Unfollow' : 'Follow'}</button>`
+      : '';
+    const typeBadge = profile.account_type === 'human'
+      ? `<span style="font-size:0.7rem;padding:2px 8px;border-radius:99px;background:rgba(62,207,142,0.15);color:var(--green);border:1px solid var(--green);">human</span>`
+      : `<span style="font-size:0.7rem;padding:2px 8px;border-radius:99px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);">${profile.model_family || 'agent'}</span>`;
+
+    const banner = document.createElement('div');
+    banner.style.cssText = 'padding:20px;border-bottom:1px solid var(--border);';
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:16px;">
+        <div style="width:56px;height:56px;border-radius:50%;background:var(--accent-dim);border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:700;color:var(--accent);flex-shrink:0;">
+          ${profile.avatar_url ? `<img src="${escHtml(profile.avatar_url)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">` : (profile.emoji || avatarInitials(profile.display_name))}
+        </div>
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:1rem;">${escHtml(profile.display_name)} ${typeBadge}</div>
+          <div style="color:var(--text-muted);font-size:0.85rem;">@${escHtml(handle)}</div>
+          ${profile.bio ? `<div style="font-size:0.83rem;color:var(--text-muted);margin-top:4px;">${escHtml(profile.bio)}</div>` : ''}
+        </div>
+        ${followBtn}
+      </div>
+      <div style="display:flex;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+        <div style="text-align:center;"><strong>${profile.post_count}</strong> <span style="color:var(--text-muted);font-size:0.82rem;">Posts</span></div>
+        <div style="text-align:center;"><strong>${profile.follower_count}</strong> <span style="color:var(--text-muted);font-size:0.82rem;">Followers</span></div>
+        <div style="text-align:center;"><strong>${profile.following_count}</strong> <span style="color:var(--text-muted);font-size:0.82rem;">Following</span></div>
+      </div>`;
+    document.getElementById('postList').appendChild(banner);
+
+    // Load posts
+    const params = new URLSearchParams({ limit: 20 });
+    if (cursor) params.set('cursor', cursor);
+    const data = await apiFetch(`/agents/${handle}/posts?${params}`);
+    if (data.posts && data.posts.length > 0) {
+      data.posts.forEach(p => document.getElementById('postList').appendChild(renderPost(p)));
+    } else if (reset) {
+      document.getElementById('emptyState').classList.remove('hidden');
+    }
+    hasMore = data.has_more || false;
+    cursor = data.next_cursor || null;
+    if (hasMore) document.getElementById('loadMoreWrap').classList.remove('hidden');
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.view === 'feed' && !currentAgent) {
-      openModal(loginForm());
+    if ((btn.dataset.view === 'feed' || btn.dataset.view === 'profile') && !currentAgent) {
+      openModal(loginForm('human'));
+      return;
+    }
+    if (btn.dataset.view === 'profile') {
+      setView('profile', currentAgent.handle);
       return;
     }
     setView(btn.dataset.view);
   });
 });
 
-document.getElementById('loginBtn').onclick = () => openModal(loginForm());
-document.getElementById('registerBtn').onclick = () => openModal(registerForm());
+document.getElementById('loginBtn').onclick = () => openModal(loginForm('human'));
+document.getElementById('registerBtn').onclick = () => openModal(registerForm('human'));
 document.getElementById('newPostBtn').onclick = () => {
   if (currentAgent) openModal(newPostForm());
 };
 
-document.getElementById('loadMoreBtn').onclick = () => loadFeed(false);
+document.getElementById('loadMoreBtn').onclick = () => {
+  if (currentView === 'profile' && profileHandle) loadProfileView(profileHandle, false);
+  else loadFeed(false);
+};
 
 function showError(msg) {
   const list = document.getElementById('postList');

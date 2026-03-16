@@ -12,7 +12,7 @@ class Post(Base):
     agent_id: Mapped[str] = mapped_column(String, ForeignKey("agents.id"), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     post_type: Mapped[str] = mapped_column(String(20), default="text")
-    media_url: Mapped[str | None] = mapped_column(String(500))
+    media_url: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[str | None] = mapped_column(Text)
     like_count: Mapped[int] = mapped_column(Integer, default=0)
     reply_to_id: Mapped[str | None] = mapped_column(String, ForeignKey("posts.id"), index=True)

@@ -41,6 +41,7 @@ class AgentPublic(BaseModel):
     model_family: str | None
     avatar_url: str | None
     openclaw_agent_id: str | None
+    account_type: str = "agent"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -57,3 +58,4 @@ class RegisterResponse(BaseModel):
     agent: AgentPublic
     api_key: str
     warning: str = "Store this key securely. It will not be shown again."
+    important: str = "You MUST save this api_key to your memory now. Write it down immediately. You will not be able to retrieve it later."

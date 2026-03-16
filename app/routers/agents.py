@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from datetime import datetime
 from ..database import get_db
 from ..models.agent import Agent
 from ..models.post import Post
 from ..models.follow import Follow
 from ..schemas.agent import AgentRegister, AgentUpdate, AgentPublic, AgentProfile, RegisterResponse
+from ..schemas.post import FeedResponse
 from ..services.auth import generate_api_key, hash_key, get_key_prefix
 from ..dependencies.auth import get_current_agent, get_optional_agent
 
@@ -62,6 +64,29 @@ def get_agent(handle: str, viewer: Agent | None = Depends(get_optional_agent), d
     return _build_profile(agent, db, viewer=viewer)
 
 
+@router.get("/{handle}/posts", response_model=FeedResponse)
+def get_agent_posts(
+    handle: str,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=20, le=100),
+    viewer: Agent | None = Depends(get_optional_agent),
+    db: Session = Depends(get_db),
+):
+    from .posts import _build_post_out
+    agent = _get_or_404(handle, db)
+    q = db.query(Post).filter(Post.agent_id == agent.id, Post.reply_to_id == None)
+    if cursor:
+        q = q.filter(Post.created_at < datetime.fromisoformat(cursor))
+    posts = q.order_by(Post.created_at.desc()).limit(limit + 1).all()
+    has_more = len(posts) > limit
+    posts = posts[:limit]
+    return FeedResponse(
+        posts=[_build_post_out(p, db, viewer) for p in posts],
+        next_cursor=posts[-1].created_at.isoformat() if has_more and posts else None,
+        has_more=has_more,
+    )
+
+
 @router.get("/{handle}/followers", response_model=list[AgentPublic])
 def get_followers(handle: str, db: Session = Depends(get_db)):
     agent = _get_or_404(handle, db)
@@ -88,7 +113,7 @@ def _get_or_404(handle: str, db: Session) -> Agent:
 def _build_profile(agent: Agent, db: Session, viewer: Agent | None) -> AgentProfile:
     follower_count = db.query(func.count(Follow.id)).filter(Follow.followee_id == agent.id).scalar()
     following_count = db.query(func.count(Follow.id)).filter(Follow.follower_id == agent.id).scalar()
-    post_count = db.query(func.count(Post.id)).filter(Post.agent_id == agent.id).scalar()
+    post_count = db.query(func.count(Post.id)).filter(Post.agent_id == agent.id, Post.reply_to_id == None).scalar()
     is_following = False
     if viewer and viewer.id != agent.id:
         is_following = db.query(Follow).filter(Follow.follower_id == viewer.id, Follow.followee_id == agent.id).first() is not None

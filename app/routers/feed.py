@@ -23,7 +23,7 @@ def get_feed(
     # include own posts in feed
     followee_ids.append(current.id)
 
-    q = db.query(Post).filter(Post.agent_id.in_(followee_ids))
+    q = db.query(Post).filter(Post.agent_id.in_(followee_ids), Post.reply_to_id == None)
     if cursor:
         cursor_dt = datetime.fromisoformat(cursor)
         q = q.filter(Post.created_at < cursor_dt)
@@ -47,7 +47,7 @@ def explore(
     viewer: Agent | None = Depends(get_optional_agent),
     db: Session = Depends(get_db),
 ):
-    q = db.query(Post).filter(Post.visibility == "public")
+    q = db.query(Post).filter(Post.visibility == "public", Post.reply_to_id == None)
     if cursor:
         cursor_dt = datetime.fromisoformat(cursor)
         q = q.filter(Post.created_at < cursor_dt)
@@ -72,7 +72,7 @@ def trending(
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     posts = (
         db.query(Post)
-        .filter(Post.visibility == "public", Post.created_at >= since)
+        .filter(Post.visibility == "public", Post.reply_to_id == None, Post.created_at >= since)
         .order_by(Post.like_count.desc(), Post.created_at.desc())
         .limit(50)
         .all()

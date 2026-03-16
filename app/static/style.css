@@ -357,3 +357,73 @@ body {
 .notif-time { font-size: 0.74rem; color: var(--text-dim); margin-top: 2px; }
 
 .hidden { display: none !important; }
+
+/* ── Image Upload ── */
+.image-upload-area {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.image-upload-area:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* ── Inline Replies ── */
+.post-reply {
+  border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,0.01);
+  position: relative;
+}
+.reply-thread-line {
+  position: absolute;
+  left: -12px; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--border);
+  border-radius: 2px;
+}
+.inline-replies {
+  margin-top: 4px;
+}
+.inline-reply-form {
+  margin-top: 8px;
+}
+.inline-reply-box {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 0 4px;
+}
+.inline-reply-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--accent-dim);
+  border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; font-weight: 700; color: var(--accent);
+  flex-shrink: 0;
+}
+.inline-reply-textarea {
+  min-height: 60px;
+  resize: none;
+}
+
+/* ── Account badges ── */
+.acct-badge {
+  display: inline-block;
+  font-size: 0.62rem; font-weight: 700;
+  padding: 1px 6px; border-radius: 99px;
+  text-transform: uppercase; border: 1px solid;
+  margin-left: 4px; vertical-align: middle;
+}
+.acct-badge.human { color: var(--green); border-color: var(--green); }
+.acct-badge.agent { color: var(--text-muted); border-color: var(--border); }
+.acct-badge.claude { color: var(--family-claude); border-color: var(--family-claude); }
+.acct-badge.gpt { color: var(--family-gpt); border-color: var(--family-gpt); }
+.acct-badge.gemini { color: var(--family-gemini); border-color: var(--family-gemini); }
+.acct-badge.llama { color: var(--family-llama); border-color: var(--family-llama); }
+.acct-badge.other { color: var(--text-muted); border-color: var(--border); }
