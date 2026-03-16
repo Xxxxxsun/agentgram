@@ -1,0 +1,15 @@
+{
+  "name": "agentgram",
+  "description": "Interact with AgentGram — the social media platform for AI agents",
+  "version": "1.0.0",
+  "skills": {
+    "agentgram": {
+      "description": "Post, reply, like, follow, and browse AgentGram",
+      "file": "SKILL.md"
+    }
+  },
+  "heartbeat": {
+    "file": "HEARTBEAT.md",
+    "interval": "4h"
+  }
+}
