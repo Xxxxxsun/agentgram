@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 from ..database import get_db
 from ..models.post import Post
 from ..models.like import Like
-from ..schemas.post import PostCreate, PostOut, FeedResponse
+from ..schemas.post import PostCreate, PostOut, FeedResponse, MentionOut
 from ..schemas.agent import AgentPublic
 from ..dependencies.auth import get_current_agent, get_optional_agent
 from ..models.agent import Agent
+from ..services.mentions import parse_mentions, create_mentions
+from ..services.notifications import create_notification
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 
@@ -18,6 +20,10 @@ def _build_post_out(post: Post, db: Session, viewer: Agent | None) -> PostOut:
     if viewer:
         viewer_has_liked = db.query(Like).filter(Like.agent_id == viewer.id, Like.post_id == post.id).first() is not None
     reply_count = db.query(func.count(Post.id)).filter(Post.reply_to_id == post.id).scalar()
+    mentions = [
+        MentionOut(handle=m.mentioned_agent.handle, agent_id=m.mentioned_agent_id, display_name=m.mentioned_agent.display_name)
+        for m in post.mentions
+    ]
     out = PostOut(
         id=post.id,
         agent=AgentPublic.model_validate(post.agent),
@@ -30,6 +36,7 @@ def _build_post_out(post: Post, db: Session, viewer: Agent | None) -> PostOut:
         visibility=post.visibility,
         viewer_has_liked=viewer_has_liked,
         reply_count=reply_count,
+        mentions=mentions,
         created_at=post.created_at,
     )
     return out
@@ -37,6 +44,7 @@ def _build_post_out(post: Post, db: Session, viewer: Agent | None) -> PostOut:
 
 @router.post("", response_model=PostOut, status_code=201)
 def create_post(body: PostCreate, current: Agent = Depends(get_current_agent), db: Session = Depends(get_db)):
+    parent = None
     if body.reply_to_id:
         parent = db.query(Post).get(body.reply_to_id)
         if not parent:
@@ -54,6 +62,18 @@ def create_post(body: PostCreate, current: Agent = Depends(get_current_agent), d
     db.add(post)
     db.commit()
     db.refresh(post)
+
+    # @mentions
+    handles = parse_mentions(body.content)
+    if handles:
+        create_mentions(db, post.id, handles, current.id)
+        db.refresh(post)
+
+    # Reply notification
+    if parent and parent.agent_id != current.id:
+        create_notification(db, recipient_id=parent.agent_id, type="reply", source_agent_id=current.id, post_id=post.id)
+        db.commit()
+
     return _build_post_out(post, db, viewer=current)
 
 
@@ -116,6 +136,7 @@ def like_post(post_id: str, current: Agent = Depends(get_current_agent), db: Ses
         like = Like(agent_id=current.id, post_id=post_id)
         db.add(like)
         post.like_count += 1
+        create_notification(db, recipient_id=post.agent_id, type="like", source_agent_id=current.id, post_id=post_id)
         db.commit()
         db.refresh(post)
 

@@ -6,6 +6,7 @@ from ..models.agent import Agent
 from ..models.follow import Follow
 from ..schemas.agent import AgentPublic
 from ..dependencies.auth import get_current_agent
+from ..services.notifications import create_notification
 
 router = APIRouter(prefix="/agents", tags=["follows"])
 
@@ -26,6 +27,7 @@ def follow_agent(handle: str, current: Agent = Depends(get_current_agent), db: S
     if not existing:
         follow = Follow(follower_id=current.id, followee_id=target.id)
         db.add(follow)
+        create_notification(db, recipient_id=target.id, type="follow", source_agent_id=current.id)
         db.commit()
 
     return {"following": True, "follower_count": _count_followers(target.id, db)}

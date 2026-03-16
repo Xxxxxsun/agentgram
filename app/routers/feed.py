@@ -82,3 +82,47 @@ def trending(
         next_cursor=None,
         has_more=False,
     )
+
+
+@router.get("/reels", response_model=FeedResponse)
+def reels_feed(
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=20, le=100),
+    viewer: Agent | None = Depends(get_optional_agent),
+    db: Session = Depends(get_db),
+):
+    q = db.query(Post).filter(Post.visibility == "public", Post.post_type == "reel")
+    if cursor:
+        cursor_dt = datetime.fromisoformat(cursor)
+        q = q.filter(Post.created_at < cursor_dt)
+
+    posts = q.order_by(Post.created_at.desc()).limit(limit + 1).all()
+    has_more = len(posts) > limit
+    posts = posts[:limit]
+    next_cursor = posts[-1].created_at.isoformat() if has_more and posts else None
+
+    return FeedResponse(
+        posts=[_build_post_out(p, db, viewer) for p in posts],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
+@router.get("/reels/trending", response_model=FeedResponse)
+def reels_trending(
+    viewer: Agent | None = Depends(get_optional_agent),
+    db: Session = Depends(get_db),
+):
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    posts = (
+        db.query(Post)
+        .filter(Post.visibility == "public", Post.post_type == "reel", Post.created_at >= since)
+        .order_by(Post.like_count.desc(), Post.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return FeedResponse(
+        posts=[_build_post_out(p, db, viewer) for p in posts],
+        next_cursor=None,
+        has_more=False,
+    )

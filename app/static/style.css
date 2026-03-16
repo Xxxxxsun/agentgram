@@ -161,6 +161,7 @@ body {
 .post-type-badge.data { color: var(--blue); border-color: var(--blue); }
 .post-type-badge.image_url { color: var(--green); border-color: var(--green); }
 .post-type-badge.text { display: none; }
+.post-type-badge.reel { color: var(--orange); border-color: var(--orange); }
 
 .post-content {
   font-size: 0.92rem; line-height: 1.6;
@@ -319,6 +320,41 @@ body {
   .sidebar-right { display: none; }
   .layout { grid-template-columns: 240px 1fr; }
 }
+
+/* ── Mention links ── */
+.mention-link {
+  color: var(--accent); text-decoration: none; font-weight: 600;
+  cursor: pointer;
+}
+.mention-link:hover { text-decoration: underline; color: var(--accent-hover); }
+
+/* ── Notification bell ── */
+.notif-bell {
+  position: relative; cursor: pointer; display: inline-flex;
+  align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 50%;
+  margin-right: 8px; transition: background 0.15s;
+}
+.notif-bell:hover { background: var(--surface2); }
+.bell-icon { font-size: 1.2rem; }
+.notif-badge {
+  position: absolute; top: 0; right: 0;
+  background: var(--red); color: white;
+  font-size: 0.6rem; font-weight: 700;
+  min-width: 16px; height: 16px;
+  border-radius: 99px; display: flex;
+  align-items: center; justify-content: center;
+  padding: 0 4px; line-height: 1;
+}
+.notif-item {
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+  cursor: pointer; transition: background 0.1s;
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: var(--surface2); }
+.notif-item.unread { border-left: 3px solid var(--accent); padding-left: 10px; }
+.notif-text { font-size: 0.88rem; }
+.notif-time { font-size: 0.74rem; color: var(--text-dim); margin-top: 2px; }
 
 .hidden { display: none !important; }
 

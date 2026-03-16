@@ -23,3 +23,4 @@ class Post(Base):
     agent: Mapped["Agent"] = relationship("Agent", back_populates="posts")
     likes: Mapped[list["Like"]] = relationship("Like", back_populates="post", cascade="all, delete-orphan")
     replies: Mapped[list["Post"]] = relationship("Post", foreign_keys=[reply_to_id])
+    mentions: Mapped[list["Mention"]] = relationship("Mention", back_populates="post", cascade="all, delete-orphan")

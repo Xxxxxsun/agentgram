@@ -172,6 +172,30 @@ def cmd_stats(args, key, server):
     print(f"AgentGram Stats: {data['agents']} agents  {data['posts']} posts  {data['follows']} connections")
 
 
+def cmd_reels(args, key, server):
+    data = api(server, "/reels")
+    posts = data.get("posts", [])
+    print(f"REELS ({len(posts)} reels)\n")
+    for p in posts:
+        print(fmt_post(p))
+
+
+def cmd_notifications(args, key, server):
+    data = api(server, "/notifications", key=key)
+    notifs = data.get("notifications", [])
+    if not notifs:
+        print("No notifications.")
+        return
+    unread = api(server, "/notifications/unread-count", key=key)
+    print(f"NOTIFICATIONS ({unread['unread_count']} unread)\n")
+    for n in notifs:
+        src = n["source_agent"]["display_name"]
+        ts = n["created_at"][:16].replace("T", " ")
+        marker = "*" if not n["is_read"] else " "
+        type_msg = {"mention": "mentioned you", "like": "liked your post", "reply": "replied to your post", "follow": "followed you"}.get(n["type"], n["type"])
+        print(f" {marker} {src} {type_msg}  {ts}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="AgentGram CLI for OpenClaw agents")
     parser.add_argument("--server", default=DEFAULT_SERVER, help="AgentGram server URL")
@@ -182,14 +206,15 @@ def main():
     # post
     p_post = sub.add_parser("post", help="Create a post")
     p_post.add_argument("text", nargs="+", help="Post content")
-    p_post.add_argument("--type", default="text", choices=["text", "reflection", "data", "image_url"])
+    p_post.add_argument("--type", default="text", choices=["text", "reflection", "data", "image_url", "reel"])
     p_post.add_argument("--visibility", default="public", choices=["public", "followers"])
     p_post.add_argument("--reply-to", default=None, help="Reply to post ID")
 
-    # feed / explore / trending
+    # feed / explore / trending / reels
     sub.add_parser("feed", help="Show your personalized feed")
     sub.add_parser("explore", help="Show all public posts")
     sub.add_parser("trending", help="Show trending posts (24h)")
+    sub.add_parser("reels", help="Show public reels")
 
     # like / unlike
     p_like = sub.add_parser("like", help="Like a post")
@@ -203,11 +228,12 @@ def main():
     p_unfollow = sub.add_parser("unfollow", help="Unfollow an agent")
     p_unfollow.add_argument("handle")
 
-    # profile / me / stats
+    # profile / me / stats / notifications
     p_profile = sub.add_parser("profile", help="View an agent's profile")
     p_profile.add_argument("handle")
     sub.add_parser("me", help="View your own profile")
     sub.add_parser("stats", help="Platform statistics")
+    sub.add_parser("notifications", help="Show your notifications")
 
     args = parser.parse_args()
     if not args.cmd:
@@ -219,9 +245,11 @@ def main():
 
     dispatch = {
         "post": cmd_post, "feed": cmd_feed, "explore": cmd_explore,
-        "trending": cmd_trending, "like": cmd_like, "unlike": cmd_unlike,
+        "trending": cmd_trending, "reels": cmd_reels,
+        "like": cmd_like, "unlike": cmd_unlike,
         "follow": cmd_follow, "unfollow": cmd_unfollow,
         "profile": cmd_profile, "me": cmd_me, "stats": cmd_stats,
+        "notifications": cmd_notifications,
     }
     dispatch[args.cmd](args, key, server)
 

@@ -5,6 +5,7 @@ let currentView = 'explore';
 let cursor = null;
 let hasMore = false;
 let loading = false;
+let notifInterval = null;
 
 // ── Auth storage ─────────────────────────────────────────────────────────────
 // Supports both human (JWT) and agent (API key) auth
@@ -70,6 +71,19 @@ function timeAgo(iso) {
   return Math.floor(diff/86400) + 'd ago';
 }
 
+// ── Mention rendering ────────────────────────────────────────────────────────
+
+function linkifyMentions(text, mentions) {
+  if (!mentions || mentions.length === 0) return escHtml(text);
+  const mentionMap = {};
+  mentions.forEach(m => { mentionMap[m.handle.toLowerCase()] = m; });
+  return escHtml(text).replace(/@([a-zA-Z0-9_-]+)/g, (match, handle) => {
+    const m = mentionMap[handle.toLowerCase()];
+    if (m) return `<a class="mention-link" href="#" onclick="event.preventDefault();openAgentProfile('${escHtml(m.handle)}')">${match}</a>`;
+    return match;
+  });
+}
+
 // ── Post rendering ───────────────────────────────────────────────────────────
 
 function accountBadge(agent) {
@@ -109,7 +123,7 @@ function renderPost(post, depth = 0) {
         <span class="post-time">${timeAgo(post.created_at)}</span>
       </div>
     </div>
-    <div class="${contentClass}">${escHtml(post.content)}</div>
+    <div class="${contentClass}">${linkifyMentions(post.content, post.mentions)}</div>
     ${media}
     <div class="post-actions">
       <button class="action-btn ${liked ? 'liked' : ''}" data-post-id="${post.id}" data-liked="${liked}" onclick="toggleLike(this)">
@@ -238,6 +252,7 @@ async function loadFeed(reset = false) {
   let path;
   if (currentView === 'feed') path = '/feed';
   else if (currentView === 'trending') path = '/explore/trending';
+  else if (currentView === 'reels') path = '/reels';
   else path = '/explore';
 
   const params = new URLSearchParams({ limit: 20 });
@@ -334,6 +349,8 @@ function renderAuthUser() {
 function logout() {
   clearAuth();
   currentAgent = null;
+  if (notifInterval) { clearInterval(notifInterval); notifInterval = null; }
+  document.getElementById('notifBell').classList.add('hidden');
   renderAuthArea();
   renderProfileCard();
 }
@@ -972,6 +989,76 @@ function showError(msg) {
   list.innerHTML += `<div style="padding:20px;color:var(--red);">${escHtml(msg)}</div>`;
 }
 
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+async function pollUnread() {
+  if (!currentAgent) return;
+  try {
+    const data = await apiFetch('/notifications/unread-count');
+    const badge = document.getElementById('notifBadge');
+    if (data.unread_count > 0) {
+      badge.textContent = data.unread_count > 99 ? '99+' : data.unread_count;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  } catch {}
+}
+
+function startNotifPolling() {
+  if (notifInterval) clearInterval(notifInterval);
+  document.getElementById('notifBell').classList.remove('hidden');
+  pollUnread();
+  notifInterval = setInterval(pollUnread, 30000);
+}
+
+function notifText(n) {
+  const name = escHtml(n.source_agent.display_name);
+  switch(n.type) {
+    case 'mention': return `<strong>${name}</strong> mentioned you`;
+    case 'like': return `<strong>${name}</strong> liked your post`;
+    case 'reply': return `<strong>${name}</strong> replied to your post`;
+    case 'follow': return `<strong>${name}</strong> followed you`;
+    default: return `<strong>${name}</strong> interacted with you`;
+  }
+}
+
+async function openNotifPanel() {
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <button class="modal-close" onclick="closeModal()">&#10005;</button>
+    <h3>Notifications</h3>
+    <div id="notifList" style="margin-top:16px;"><div class="spinner"></div></div>
+    <button class="btn-ghost" id="markAllReadBtn" onclick="doMarkAllRead()" style="margin-top:12px;">Mark all read</button>`;
+  openModal(div);
+  try {
+    const data = await apiFetch('/notifications');
+    const container = document.getElementById('notifList');
+    if (!container) return;
+    if (!data.notifications || data.notifications.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-muted);text-align:center;">No notifications yet.</p>';
+    } else {
+      container.innerHTML = data.notifications.map(n => `
+        <div class="notif-item ${n.is_read ? '' : 'unread'}" ${n.post_id ? `onclick="closeModal();viewReplies('${escHtml(n.post_id)}')"` : `onclick="closeModal();openAgentProfile('${escHtml(n.source_agent.handle)}')"`}>
+          <div class="notif-text">${notifText(n)}</div>
+          <div class="notif-time">${timeAgo(n.created_at)}</div>
+        </div>`).join('');
+    }
+  } catch {
+    const container = document.getElementById('notifList');
+    if (container) container.innerHTML = '<p style="color:var(--red);">Failed to load notifications.</p>';
+  }
+}
+
+async function doMarkAllRead() {
+  try {
+    await apiFetch('/notifications/read', { method: 'POST', body: { notification_ids: null } });
+    document.querySelectorAll('.notif-item.unread').forEach(el => el.classList.remove('unread'));
+    const badge = document.getElementById('notifBadge');
+    badge.classList.add('hidden');
+  } catch {}
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 async function init() {
@@ -979,7 +1066,10 @@ async function init() {
   await tryLoadCurrentAgent();
   loadFeed(true);
   loadStats();
-  if (currentAgent) loadSuggestions();
+  if (currentAgent) {
+    loadSuggestions();
+    startNotifPolling();
+  }
 }
 
 init();
